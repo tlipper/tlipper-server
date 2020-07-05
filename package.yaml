@@ -1,0 +1,66 @@
+name:                twitch-vodder-server
+version:             0.1.0.0
+github:              "yigitozkavci/twitch-vodder-server"
+license:             BSD3
+author:              "Yigit Ozkavci"
+maintainer:          "yigitozkavci@"
+copyright:           "2020 Yigit Ozkavci"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/twitch-vodder-server#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+
+executables:
+  twitch-vodder-server-exe:
+    main:                Main.hs
+    source-dirs:         src
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - servant
+    - servant-client
+    - http-client
+    - http-client-tls
+    - aeson
+    - aeson-casing
+    - bytestring
+    - text
+    - regex-posix
+    - regex-base
+    - process
+    - mtl
+    - lifted-async
+    - servant-server
+    - warp
+    - monad-control
+    - persistent
+    - persistent-postgresql
+    - persistent-template
+    - monad-logger
+    - conduit
+    - esqueleto
+
+tests:
+  twitch-vodder-server-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - twitch-vodder-server
