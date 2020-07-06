@@ -1,19 +1,26 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
+import Configuration.Dotenv
+import qualified Control.Monad.Trans.AWS as AWS
+import qualified Data.ByteString.Char8 as BS8
+import Data.Functor (void)
 import Database (PostgresqlParams(..), withDBMigration)
 import Server (runServer)
 import System.Environment (getEnv)
 import qualified Twitch.API as Twitch
-import Data.Functor (void)
-import Configuration.Dotenv
 
 main :: IO ()
 main = do
   void $ loadFile defaultConfig
-  awsAccessKey <- getEnv "AWS_ACCESS_KEY"
-  awsSecretKey <- getEnv "AWS_SECRET_KEY"
+  let awsCredentials =
+        AWS.FromEnv
+          "AWS_ACCESS_KEY"
+          "AWS_SECRET_KEY"
+          Nothing
+          (Just "AWS_REGION")
   twitchAppAccessToken <- getEnv "TWITCH_APP_ACCESS_TOKEN"
   twitchClientId <- getEnv "TWITCH_CLIENT_ID"
   serverPort <- read <$> getEnv "SERVER_PORT"
@@ -26,4 +33,4 @@ main = do
   twitchClientEnv <-
     Twitch.mkTwitchClientEnv twitchAppAccessToken twitchClientId
   withDBMigration postgresqlParams $ \sqlCtrl -> do
-    runServer twitchClientEnv serverPort sqlCtrl
+    runServer twitchClientEnv awsCredentials serverPort sqlCtrl

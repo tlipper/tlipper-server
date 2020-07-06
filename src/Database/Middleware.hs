@@ -50,3 +50,38 @@ instance ToDatabase Twitch.Video DB.Video where
       , vType = _vType
       , vDuration = _vDuration
       }
+
+instance FromDatabase DB.Clip Twitch.Clip where
+  fromDatabase (DB.Clip {..}) =
+    Twitch.Clip
+      { _cSlug = cSlug
+      , _cTrackingId = cTrackingId
+      , _cUrl = cUrl
+      , _cEmbedUrl = cEmbedUrl
+      , _cEmbedHtml = cEmbedHtml
+      , _cVod = Twitch.ClipVod cVodId cVodUrl
+      , _cGame = cGame
+      , _cLanguage = cLanguage
+      , _cTitle = cTitle
+      , _cViews = cViews
+      , _cDuration = cDuration
+      , _cCreatedAt = cCreatedAt
+      }
+
+instance ToDatabase Twitch.Clip DB.Clip where
+  toDatabase (Twitch.Clip {..}) =
+    DB.Clip
+      { cSlug = _cSlug
+      , cTrackingId = _cTrackingId
+      , cUrl = _cUrl
+      , cEmbedUrl = _cEmbedUrl
+      , cEmbedHtml = _cEmbedHtml
+      , cVodId = Twitch._cvId _cVod
+      , cVodUrl = Twitch._cvUrl _cVod
+      , cGame = _cGame
+      , cLanguage = _cLanguage
+      , cTitle = _cTitle
+      , cViews = _cViews
+      , cDuration = _cDuration
+      , cCreatedAt = _cCreatedAt
+      }

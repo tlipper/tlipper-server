@@ -18,11 +18,11 @@ import Control.Monad.Reader
 import Data.Aeson.Casing
 import qualified Data.Aeson.TH as JSON
 import qualified Data.ByteString.Char8 as BS8
+import qualified Data.Text as T
+import Database.Extra
 import Database.Persist
 import Database.Persist.Postgresql
 import Database.Persist.TH
-import Database.Extra
-import qualified Data.Text as T
 
 share
   [mkPersist appSqlSettings, mkMigrate "migrateAll"]
@@ -44,6 +44,22 @@ Video
     vDuration T.Text
     UniqueVideoId vVid
     deriving Show
+
+Clip
+    cSlug T.Text
+    cTrackingId T.Text
+    cUrl T.Text
+    cEmbedUrl T.Text
+    cEmbedHtml T.Text
+    cVodId T.Text
+    cVodUrl T.Text
+    cGame T.Text
+    cLanguage T.Text
+    cTitle T.Text
+    cViews Int
+    cDuration Double
+    cCreatedAt T.Text
+    UniqueClipId cTrackingId
 |]
 
 data PostgresqlParams =
@@ -69,9 +85,7 @@ newtype SqlCtrl =
 
 withDBMigration :: PostgresqlParams -> (SqlCtrl -> IO ()) -> IO ()
 withDBMigration postgresqlParams action = do
-  runStderrLoggingT $
+  runNoLoggingT $
     withPostgresqlPool (BS8.pack (mkPostgresqlConnUrl postgresqlParams)) 10 $ \pool -> do
       liftIO $ flip runSqlPersistMPool pool $ do runMigration migrateAll
       liftIO $ action (SqlCtrl (flip runSqlPersistMPool pool))
-
-$(JSON.deriveJSON (aesonPrefix snakeCase) ''Video)

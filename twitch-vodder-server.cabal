@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6c8fed9a665f32057c24f86641d87813670735ff8f2befdd480cd392a9609966
+-- hash: b2e721665b4d7f1ae52f7867c805caad92291536dc1af5ea17baa58c7840cfa8
 
 name:           twitch-vodder-server
 version:        0.1.0.0
@@ -28,6 +28,8 @@ source-repository head
 executable twitch-vodder-server-exe
   main-is: Main.hs
   other-modules:
+      Aeson.Extra
+      AWS.API
       Database
       Database.Extra
       Database.Middleware
@@ -41,6 +43,8 @@ executable twitch-vodder-server-exe
   build-depends:
       aeson
     , aeson-casing
+    , amazonka
+    , amazonka-s3
     , base >=4.7 && <5
     , bytestring
     , conduit
@@ -48,6 +52,7 @@ executable twitch-vodder-server-exe
     , esqueleto
     , http-client
     , http-client-tls
+    , lens
     , lifted-async
     , monad-control
     , monad-logger

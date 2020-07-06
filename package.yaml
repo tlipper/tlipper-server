@@ -54,6 +54,9 @@ executables:
     - conduit
     - esqueleto
     - dotenv
+    - amazonka
+    - amazonka-s3
+    - lens
 
 tests:
   twitch-vodder-server-test:
