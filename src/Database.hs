@@ -21,26 +21,28 @@ import qualified Data.ByteString.Char8 as BS8
 import Database.Persist
 import Database.Persist.Postgresql
 import Database.Persist.TH
+import Database.Extra
+import qualified Data.Text as T
 
 share
-  [mkPersist sqlSettings, mkMigrate "migrateAll"]
-  [persistLowerCase|
+  [mkPersist appSqlSettings, mkMigrate "migrateAll"]
+  [persistUnderscored|
 Video
-    vid String
-    userId String
-    userName String
-    title String
-    description String
-    createdAt String
-    publishedAt String
-    url String
-    thumbnailUrl String
-    viewable String
-    viewCount Int
-    language String
-    type String
-    duration String
-    UniqueVideoId vid
+    vVid T.Text
+    vUserId T.Text
+    vUserName T.Text
+    vTitle T.Text
+    vDescription T.Text
+    vCreatedAt T.Text
+    vPublishedAt T.Text
+    vUrl T.Text
+    vThumbnailUrl T.Text
+    vViewable T.Text
+    vViewCount Int
+    vLanguage T.Text
+    vType T.Text
+    vDuration T.Text
+    UniqueVideoId vVid
     deriving Show
 |]
 

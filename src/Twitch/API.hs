@@ -1,4 +1,6 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -21,39 +23,75 @@ import Servant.Client
 
 data Video =
   Video
-    { _vrId :: T.Text
-    , _vrUserId :: T.Text
-    , _vrUserName :: T.Text
-    , _vrTitle :: T.Text
-    , _vrDescription :: T.Text
-    , _vrCreatedAt :: T.Text
-    , _vrPublishedAt :: T.Text
-    , _vrUrl :: T.Text
-    , _vrThumbnailUrl :: T.Text
-    , _vrViewable :: T.Text
-    , _vrViewCount :: Integer
-    , _vrLanguage :: T.Text
-    , _vrType :: T.Text
-    , _vrDuration :: T.Text
+    { _vId :: T.Text
+    , _vUserId :: T.Text
+    , _vUserName :: T.Text
+    , _vTitle :: T.Text
+    , _vDescription :: T.Text
+    , _vCreatedAt :: T.Text
+    , _vPublishedAt :: T.Text
+    , _vUrl :: T.Text
+    , _vThumbnailUrl :: T.Text
+    , _vViewable :: T.Text
+    , _vViewCount :: Int
+    , _vLanguage :: T.Text
+    , _vType :: T.Text
+    , _vDuration :: T.Text
     }
   deriving (Generic, Show, Eq)
 
 data ListVideosResponse =
   ListVideosResponse
     { _lvrData :: [Video]
+    , _lvrPagination :: Pagination String
     }
-  deriving (Generic, Show, Eq)
+  deriving (Show)
+
+data Pagination cursor = Pagination { _pCursor :: Maybe cursor } deriving (Generic, Show, Eq)
+
+listVideos :: Maybe Int -> Maybe String -> ClientM ListVideosResponse
+listVideos = client api
+
+listPaginatedVideos :: Maybe Int -> ClientM [Video]
+listPaginatedVideos mbUserId =
+  paginate (listVideos mbUserId) _lvrData (_pCursor . _lvrPagination)
 
 type ListVideos
-   = "videos" :> QueryParam "user_id" Integer :> Get '[ JSON] ListVideosResponse
+   = "videos" :> QueryParam "user_id" Int :> QueryParam "after" String :> Get '[ JSON] ListVideosResponse
 
 type API = ListVideos
 
 api :: Proxy API
 api = Proxy
 
-listVideos :: Maybe Integer -> ClientM ListVideosResponse
-listVideos = client api
+paginate
+  :: forall resp result cursor m s
+  . (Monad m, Semigroup s)
+  => (Maybe cursor -> m resp)
+  -- ^ Given an optional pagination cursor, run the request
+  -> (resp -> s)
+  -- ^ Pick result set from the response
+  -> (resp -> Maybe cursor)
+  -- ^ Pick possible pagination cursor from the response
+  -> m s
+  -- ^ Combined results
+paginate act getResult getPaginationCursor = do
+  resp <- act Nothing
+  case getPaginationCursor resp of
+    Nothing ->
+      pure $ getResult resp
+    (Just cursor) -> do
+      (getResult resp <>) <$> go cursor
+  where
+    go :: cursor -> m s
+    go cursor = do
+      resp <- act (Just cursor)
+      case getPaginationCursor resp of
+        Nothing ->
+          pure $ getResult resp
+        (Just newCursor) ->
+          (getResult resp <>) <$> go newCursor
+
 
 twitchAPIBaseUrl :: IsString s => s
 twitchAPIBaseUrl = "https://api.twitch.tv/helix/"
@@ -77,5 +115,5 @@ mkTwitchClientEnv token clientId = do
   pure $ mkClientEnv manager baseUrl
 
 $(JSON.deriveJSON (aesonPrefix snakeCase) ''ListVideosResponse)
-
 $(JSON.deriveJSON (aesonPrefix snakeCase) ''Video)
+$(JSON.deriveJSON (aesonPrefix snakeCase) ''Pagination)

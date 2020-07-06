@@ -4,16 +4,16 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 9f987925a13b2f1438e9a3bb78d7ad67d40b94602688bb1b56fe98966b60db25
+-- hash: 6fa2fb943798137562ddbfb758deeae1ac602585468bdc56b914da169f9ba0d3
 
 name:           twitch-vodder-server
 version:        0.1.0.0
 description:    Please see the README on GitHub at <https://github.com/githubuser/twitch-vodder-server#readme>
-homepage:       https://github.com/githubuser/twitch-vodder-server#readme
-bug-reports:    https://github.com/githubuser/twitch-vodder-server/issues
-author:         Author name here
-maintainer:     example@example.com
-copyright:      2020 Author name here
+homepage:       https://github.com/yigitozkavci/twitch-vodder-server#readme
+bug-reports:    https://github.com/yigitozkavci/twitch-vodder-server/issues
+author:         Yigit Ozkavci
+maintainer:     yigitozkavci@
+copyright:      2020 Yigit Ozkavci
 license:        BSD3
 license-file:   LICENSE
 build-type:     Simple
@@ -23,12 +23,14 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: https://github.com/githubuser/twitch-vodder-server
+  location: https://github.com/yigitozkavci/twitch-vodder-server
 
 executable twitch-vodder-server-exe
   main-is: Main.hs
   other-modules:
       Database
+      Database.Extra
+      Database.Middleware
       Server
       Twitch.API
       Twitch.Vod

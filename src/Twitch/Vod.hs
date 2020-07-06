@@ -17,7 +17,7 @@ import System.Exit (ExitCode(ExitSuccess))
 import System.Process
 import Text.Regex.Base.RegexLike
 import Text.Regex.Posix
-import Twitch.API
+import qualified Twitch.API as Twitch
 
 thumbnailUrlDownloadKeyRegex :: Regex
 thumbnailUrlDownloadKeyRegex =
@@ -26,7 +26,7 @@ thumbnailUrlDownloadKeyRegex =
 downloadVideo ::
      forall m. (MonadBaseControl IO m, MonadError String m, MonadIO m)
   => ClientEnv
-  -> Video
+  -> Twitch.Video
   -> m ()
 downloadVideo clientEnv video = do
   download_key <- get_video_download_key video
@@ -37,9 +37,9 @@ downloadVideo clientEnv video = do
   _ <- merge_mpeg_files mpeg_file_paths
   delete_mpeg_files mpeg_file_paths
   where
-    get_video_download_key :: Video -> m String
-    get_video_download_key Video {_vrThumbnailUrl} = do
-      case match thumbnailUrlDownloadKeyRegex (T.unpack _vrThumbnailUrl) of
+    get_video_download_key :: Twitch.Video -> m String
+    get_video_download_key Twitch.Video {Twitch._vThumbnailUrl} = do
+      case match thumbnailUrlDownloadKeyRegex (T.unpack _vThumbnailUrl) of
         MR {mrSubList = []} ->
           throwError "Thumbnail url didn't match the regex."
         MR {mrSubList = (downloadKey:_)} -> pure downloadKey
