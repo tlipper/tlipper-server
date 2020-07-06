@@ -53,6 +53,7 @@ executables:
     - monad-logger
     - conduit
     - esqueleto
+    - dotenv
 
 tests:
   twitch-vodder-server-test:

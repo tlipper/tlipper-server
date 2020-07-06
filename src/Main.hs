@@ -6,9 +6,14 @@ import Database (PostgresqlParams(..), withDBMigration)
 import Server (runServer)
 import System.Environment (getEnv)
 import qualified Twitch.API as Twitch
+import Data.Functor (void)
+import Configuration.Dotenv
 
 main :: IO ()
 main = do
+  void $ loadFile defaultConfig
+  awsAccessKey <- getEnv "AWS_ACCESS_KEY"
+  awsSecretKey <- getEnv "AWS_SECRET_KEY"
   twitchAppAccessToken <- getEnv "TWITCH_APP_ACCESS_TOKEN"
   twitchClientId <- getEnv "TWITCH_CLIENT_ID"
   serverPort <- read <$> getEnv "SERVER_PORT"
