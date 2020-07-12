@@ -27,6 +27,16 @@ import Database.Persist.TH
 share
   [mkPersist appSqlSettings, mkMigrate "migrateAll"]
   [persistUnderscored|
+Channel
+    chBroadcasterLanguage T.Text
+    chDisplayName T.Text
+    chGameId T.Text
+    chChId T.Text
+    chIsLive Bool
+    chThumbnailUrl T.Text
+    chTitle T.Text
+    chStartedAt T.Text
+
 Video
     vVid T.Text
     vUserId T.Text

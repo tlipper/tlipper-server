@@ -22,6 +22,19 @@ import Network.HTTP.Client.TLS
 import Servant.API
 import Servant.Client
 
+data Channel =
+  Channel
+    { _chBroadcasterLanguage :: T.Text
+    , _chDisplayName :: T.Text
+    , _chGameId :: T.Text
+    , _chId :: T.Text
+    , _chIsLive :: Bool
+    , _chThumbnailUrl :: T.Text
+    , _chTitle :: T.Text
+    , _chStartedAt :: T.Text
+    }
+  deriving (Generic, Show, Eq)
+
 data Video =
   Video
     { _vId :: T.Text
@@ -72,6 +85,13 @@ data ListVideosResponse =
     }
   deriving (Show)
 
+data SearchChannelsResponse =
+  SearchChannelsResponse
+    { _scrData :: [Channel]
+    , _scrPagination :: Pagination String
+    }
+  deriving (Show)
+
 data ListClipsResponse =
   ListClipsResponse
     { _lcrClips :: [Clip]
@@ -85,10 +105,20 @@ data Pagination cursor =
     }
   deriving (Generic, Show, Eq)
 
+searchChannels :: T.Text -> Maybe String -> ClientM SearchChannelsResponse
 listVideos :: Maybe Int -> Maybe String -> ClientM ListVideosResponse
 listClips ::
      Maybe String -> Maybe Int -> Maybe String -> ClientM ListClipsResponse
-listVideos :<|> listClips = client api
+searchChannels :<|> listVideos :<|> listClips = client api
+
+searchPaginatedChannels :: T.Text -> ClientM [Channel]
+searchPaginatedChannels channelName =
+  paginate
+    (searchChannels channelName)
+    _scrData
+    (_pCursor . _scrPagination)
+    (const True)
+    500
 
 listPaginatedVideos :: Maybe Int -> ClientM [Video]
 listPaginatedVideos mbUserId =
@@ -108,13 +138,16 @@ listPaginatedClips mbUserId chunkFilter =
     chunkFilter
     10000
 
+type SearchChannels
+   = "helix" :> "search" :> "channels" :> QueryParam' '[ Required] "query" T.Text :> QueryParam "after" String :> Get '[ JSON] SearchChannelsResponse
+
 type ListVideos
    = "helix" :> "videos" :> QueryParam "user_id" Int :> QueryParam "after" String :> Get '[ JSON] ListVideosResponse
 
 type ListClips
    = "kraken" :> "clips" :> "top" :> QueryParam "channel" String :> QueryParam "limit" Int :> QueryParam "cursor" String :> Get '[ JSON] ListClipsResponse
 
-type API = ListVideos :<|> ListClips
+type API = SearchChannels :<|> ListVideos :<|> ListClips
 
 api :: Proxy API
 api = Proxy
@@ -188,3 +221,7 @@ $(JSON.deriveJSON jsonPrefix ''ClipVod)
 $(JSON.deriveJSON jsonPrefix ''Clip)
 
 $(JSON.deriveJSON jsonPrefix ''Pagination)
+
+$(JSON.deriveJSON jsonPrefix ''Channel)
+
+$(JSON.deriveJSON jsonPrefix ''SearchChannelsResponse)

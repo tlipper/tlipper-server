@@ -13,6 +13,32 @@ class FromDatabase dbType appType | appType -> dbType where
 class ToDatabase appType dbType | appType -> dbType where
   toDatabase :: appType -> dbType
 
+instance FromDatabase DB.Channel Twitch.Channel where
+  fromDatabase (DB.Channel {..}) =
+    Twitch.Channel
+      { _chBroadcasterLanguage = chBroadcasterLanguage
+      , _chDisplayName = chDisplayName
+      , _chGameId = chGameId
+      , _chId = chChId
+      , _chIsLive = chIsLive
+      , _chThumbnailUrl = chThumbnailUrl
+      , _chTitle = chTitle
+      , _chStartedAt = chStartedAt
+      }
+
+instance ToDatabase Twitch.Channel DB.Channel where
+  toDatabase (Twitch.Channel {..}) =
+    DB.Channel
+      { chBroadcasterLanguage = _chBroadcasterLanguage
+      , chDisplayName = _chDisplayName
+      , chGameId = _chGameId
+      , chChId = _chId
+      , chIsLive = _chIsLive
+      , chThumbnailUrl = _chThumbnailUrl
+      , chTitle = _chTitle
+      , chStartedAt = _chStartedAt
+      }
+
 instance FromDatabase DB.Video Twitch.Video where
   fromDatabase (DB.Video {..}) =
     Twitch.Video

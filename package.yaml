@@ -57,6 +57,8 @@ executables:
     - amazonka
     - amazonka-s3
     - lens
+    - wai-cors
+    - wai
 
 tests:
   twitch-vodder-server-test:
