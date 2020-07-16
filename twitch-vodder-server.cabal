@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 295396ea143735b1c82b21cf7c1a6d082eb9ab0dc5264a6a36e52e8ec9f9380c
+-- hash: bdbd2049c3cfa5e698794ea40e3d2bc5b7974104e41b552d0008a3f1620804ca
 
 name:           twitch-vodder-server
 version:        0.1.0.0
@@ -34,7 +34,9 @@ executable twitch-vodder-server-exe
       Database.Extra
       Database.Middleware
       Server
+      Twitch.Analytics
       Twitch.API
+      Twitch.Utils
       Twitch.Vod
       Paths_twitch_vodder_server
   hs-source-dirs:
@@ -45,6 +47,7 @@ executable twitch-vodder-server-exe
     , aeson-casing
     , amazonka
     , amazonka-s3
+    , attoparsec
     , base >=4.7 && <5
     , bytestring
     , conduit
@@ -67,6 +70,7 @@ executable twitch-vodder-server-exe
     , servant-client
     , servant-server
     , text
+    , time
     , wai
     , wai-cors
     , warp

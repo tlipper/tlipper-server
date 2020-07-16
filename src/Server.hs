@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -33,6 +34,7 @@ import Servant
 import Servant.Client (ClientEnv, runClientM)
 import Servant.Server
 import qualified Twitch.API as Twitch
+import qualified Twitch.Analytics as Twitch
 import qualified Twitch.Vod as Twitch
 
 type VideoId = T.Text
@@ -57,6 +59,9 @@ type ListVideos
 type ListClips
    = "videos" :> Capture' '[ Required] "video_id" VideoId :> "clips" :> Get '[ JSON] [Twitch.Clip]
 
+type GetVideoAnalysis
+   = "videos" :> Capture' '[ Required] "video_id" VideoId :> "analysis" :> Get '[ JSON] Twitch.VideoAnalytics
+
 type DownloadVideo
    = "download" :> ReqBody '[ JSON] VideoId :> Post '[ JSON] Twitch.Video
 
@@ -64,7 +69,7 @@ type SyncVideo
    = "videos" :> "sync" :> ReqBody '[ JSON] SyncVideosRequest :> Post '[ JSON] ()
 
 type API
-   = ListChannels :<|> AddChannel :<|> ListVideos :<|> DownloadVideo :<|> SyncVideo :<|> ListClips
+   = ListChannels :<|> AddChannel :<|> ListVideos :<|> DownloadVideo :<|> SyncVideo :<|> ListClips :<|> GetVideoAnalysis
 
 data ServerState =
   ServerState
@@ -91,7 +96,8 @@ server :: IORef ServerState -> DB.SqlCtrl -> Server API
 server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
   listChannels :<|> addChannel :<|> listVideos :<|> downloadVideo :<|>
   syncVideos :<|>
-  listClips
+  listClips :<|>
+  getVideoAnalysis
   where
     listChannels :: Handler [Twitch.Channel]
     listChannels = do
@@ -169,6 +175,15 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
          ESQ.from $ \v -> do
            ESQ.where_ ((v ESQ.^. DB.CVodId) ESQ.==. (ESQ.val video_id))
            return v)
+    getVideoAnalysis :: VideoId -> Handler Twitch.VideoAnalytics
+    getVideoAnalysis video_id =
+      liftIO (runSql (ESQ.getBy (DB.UniqueVideoId video_id))) >>= \case
+        Nothing -> throwError err404 {errBody = "Could not find the video."}
+        Just (fromDatabase . DB.entityVal -> video) -> do
+          clips <- listClips video_id
+          runExceptT (Twitch.analyse video clips) >>= \case
+            Left err -> throwError err500 {errBody = LBS8.pack err}
+            Right v -> pure v
 
 myApi :: Proxy API
 myApi = Proxy

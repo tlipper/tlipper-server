@@ -7,10 +7,10 @@ module Database.Middleware where
 import qualified Database as DB
 import qualified Twitch.API as Twitch
 
-class FromDatabase dbType appType | appType -> dbType where
+class FromDatabase dbType appType | appType -> dbType, dbType -> appType where
   fromDatabase :: dbType -> appType
 
-class ToDatabase appType dbType | appType -> dbType where
+class ToDatabase appType dbType | appType -> dbType, dbType -> appType where
   toDatabase :: appType -> dbType
 
 instance FromDatabase DB.Channel Twitch.Channel where

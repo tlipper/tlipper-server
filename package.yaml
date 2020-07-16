@@ -59,6 +59,8 @@ executables:
     - lens
     - wai-cors
     - wai
+    - time
+    - attoparsec
 
 tests:
   twitch-vodder-server-test:

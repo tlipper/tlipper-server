@@ -9,6 +9,7 @@
 module Twitch.API where
 
 import Aeson.Extra (jsonPrefix)
+import Control.Monad.IO.Class
 import qualified Data.Aeson as JSON
 import Data.Aeson.Casing
 import qualified Data.Aeson.TH as JSON
@@ -119,6 +120,7 @@ searchPaginatedChannels channelName =
     (_pCursor . _scrPagination)
     (const True)
     500
+    (const (pure ()))
 
 listPaginatedVideos :: Maybe Int -> ClientM [Video]
 listPaginatedVideos mbUserId =
@@ -128,6 +130,7 @@ listPaginatedVideos mbUserId =
     (_pCursor . _lvrPagination)
     (const True)
     500
+    (const (pure ()))
 
 listPaginatedClips :: Maybe String -> (Clip -> Bool) -> ClientM [Clip]
 listPaginatedClips mbUserId chunkFilter =
@@ -136,7 +139,8 @@ listPaginatedClips mbUserId chunkFilter =
     _lcrClips
     (_lcr_Cursor)
     chunkFilter
-    10000
+    100000
+    (liftIO . print)
 
 type SearchChannels
    = "helix" :> "search" :> "channels" :> QueryParam' '[ Required] "query" T.Text :> QueryParam "after" String :> Get '[ JSON] SearchChannelsResponse
@@ -164,17 +168,20 @@ paginate ::
   -- ^ Filter for the chunks of paginated data
   -> Int
   -- ^ Limit the overall results.
+  -> (Int -> m ())
+  -- ^ Do some action with the page number.
   -> m [value]
   -- ^ Combined results
-paginate act getResult getPaginationCursor chunkFilter limit = do
+paginate act getResult getPaginationCursor chunkFilter limit sideEffect = do
   resp <- act Nothing
   case getPaginationCursor resp of
     Nothing -> pure $ take limit $ filter chunkFilter $ getResult resp
     (Just cursor) -> do
-      go (filter chunkFilter (getResult resp)) cursor
+      go 1 (filter chunkFilter (getResult resp)) cursor
   where
-    go :: [value] -> cursor -> m [value]
-    go results cursor = do
+    go :: Int -> [value] -> cursor -> m [value]
+    go page results cursor = do
+      sideEffect page
       if length results >= limit
         then pure $ take limit $ results
         else do
@@ -183,7 +190,8 @@ paginate act getResult getPaginationCursor chunkFilter limit = do
           case ( length (results <> newResults) >= limit
                , getPaginationCursor resp) of
             (False, Just newCursor)
-              | cursor /= newCursor -> go (results <> newResults) newCursor
+              | cursor /= newCursor ->
+                go (page + 1) (results <> newResults) newCursor
             _ -> pure $ take limit $ results <> newResults
 
 twitchAPIBaseUrl :: IsString s => s
@@ -194,9 +202,7 @@ mkTwitchClientEnv token clientId = do
   let managerSettings =
         tlsManagerSettings
           { managerModifyRequest =
-              \req -> do
-                print req
-                putStrLn ""
+              \req ->
                 pure
                   req
                     { requestHeaders =
