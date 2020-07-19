@@ -19,6 +19,7 @@ import Data.Traversable (for)
 import GHC.Generics
 import qualified Twitch.API as Twitch
 import qualified Twitch.Utils as Twitch
+import Utils (throwOnLeft, throwOnNothing)
 
 data VideoAnalytics =
   VideoAnalytics VideoPopularityTimeline
@@ -114,14 +115,6 @@ analyse video clips = do
         ]
   let timeline = VideoPopularityTimeline videoDuration vptEvents
   pure $ VideoAnalytics timeline
-
-throwOnLeft :: MonadError String m => Either String a -> m a
-throwOnLeft (Left err) = throwError err
-throwOnLeft (Right v) = pure v
-
-throwOnNothing :: MonadError String m => T.Text -> Maybe a -> m a
-throwOnNothing err Nothing = throwError (T.unpack err)
-throwOnNothing _ (Just v) = pure v
 
 $(JSON.deriveJSON jsonPrefix ''VideoAnalytics)
 

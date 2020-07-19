@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 
 module Twitch.Utils where
@@ -11,6 +12,7 @@ import Data.Time.Clock (NominalDiffTime)
 import Text.Regex.Base.RegexLike
 import Text.Regex.Posix
 import qualified Twitch.API as Twitch
+import Utils (throwOnNothing)
 
 clipVodUrlRegex :: Regex
 clipVodUrlRegex =

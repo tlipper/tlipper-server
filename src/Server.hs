@@ -11,8 +11,11 @@
 module Server where
 
 import Aeson.Extra (jsonPrefix)
+import Conduit
 import Control.Monad.Except
 import Control.Monad.IO.Class
+import Control.Monad.Logger
+import Control.Monad.Reader
 import qualified Control.Monad.Trans.AWS as AWS
 import qualified Data.Aeson as JSON
 import qualified Data.Aeson.TH as JSON
@@ -20,12 +23,14 @@ import qualified Data.ByteString.Lazy.Char8 as LBS8
 import Data.Foldable (find)
 import Data.Foldable (for_)
 import Data.IORef
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Database as DB
 import qualified Database as DB
 import qualified Database.Esqueleto as ESQ
 import Database.Middleware
 import qualified Database.Persist as DB
+import Database.Persist
 import GHC.Generics
 import Network.Wai (Middleware)
 import qualified Network.Wai.Handler.Warp as Warp
@@ -41,13 +46,6 @@ type VideoId = T.Text
 
 type UserId = Int
 
-data SyncVideosRequest =
-  SyncVideosRequest
-    { _svrUserId :: Int
-    , _svrUserName :: T.Text
-    }
-  deriving (Generic, Show, Eq)
-
 type ListChannels = "channels" :> Get '[ JSON] [Twitch.Channel]
 
 type AddChannel
@@ -59,17 +57,20 @@ type ListVideos
 type ListClips
    = "videos" :> Capture' '[ Required] "video_id" VideoId :> "clips" :> Get '[ JSON] [Twitch.Clip]
 
+type SyncClips
+   = "videos" :> Capture' '[ Required] "video_id" VideoId :> "clips" :> "sync" :> Post '[ JSON] ()
+
 type GetVideoAnalysis
    = "videos" :> Capture' '[ Required] "video_id" VideoId :> "analysis" :> Get '[ JSON] Twitch.VideoAnalytics
 
 type DownloadVideo
-   = "download" :> ReqBody '[ JSON] VideoId :> Post '[ JSON] Twitch.Video
+   = "download" :> ReqBody '[ JSON] VideoId :> Post '[ JSON] T.Text
 
 type SyncVideo
-   = "videos" :> "sync" :> ReqBody '[ JSON] SyncVideosRequest :> Post '[ JSON] ()
+   = "videos" :> "sync" :> QueryParam' '[ Required] "channel_id" T.Text :> Post '[ JSON] ()
 
 type API
-   = ListChannels :<|> AddChannel :<|> ListVideos :<|> DownloadVideo :<|> SyncVideo :<|> ListClips :<|> GetVideoAnalysis
+   = ListChannels :<|> AddChannel :<|> ListVideos :<|> DownloadVideo :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis
 
 data ServerState =
   ServerState
@@ -92,11 +93,27 @@ serveFromDatabase state_ref (DB.SqlCtrl runSql) = do
     fmap (map DB.entityVal) $ runSql (ESQ.select $ ESQ.from $ \v -> return v)
   pure $ map fromDatabase dbChannels
 
+sqlFindOr404 ::
+     DB.SqlCtrl
+  -> String
+  -> ReaderT ESQ.SqlBackend (NoLoggingT (ResourceT IO)) (Maybe (DB.Entity record))
+  -> Handler (DB.Entity record)
+sqlFindOr404 (DB.SqlCtrl runSql) resourceName uniqueRecord =
+  liftIO (runSql uniqueRecord) >>= \case
+    Just record -> pure record
+    Nothing ->
+      throwError
+        err404
+          { errBody =
+              "Could not find the " <> LBS8.pack resourceName <> " resource."
+          }
+
 server :: IORef ServerState -> DB.SqlCtrl -> Server API
 server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
   listChannels :<|> addChannel :<|> listVideos :<|> downloadVideo :<|>
   syncVideos :<|>
   listClips :<|>
+  syncClips :<|>
   getVideoAnalysis
   where
     listChannels :: Handler [Twitch.Channel]
@@ -129,43 +146,51 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
              ESQ.where_ ((v ESQ.^. DB.VUserId) ESQ.==. (ESQ.val channel_id))
              return v)
       pure $ map fromDatabase dbChannels
-    downloadVideo :: VideoId -> Handler Twitch.Video
+    downloadVideo :: VideoId -> Handler T.Text
     downloadVideo video_id = do
       state <- liftIO $ readIORef state_ref
-      videos <-
-        liftIO $
-        fmap (map DB.entityVal) $
-        runSql (ESQ.select $ ESQ.from $ \v -> return v)
-      case find ((== video_id) . DB.vVid) videos of
-        Just (fromDatabase -> video) -> do
-          ei <-
-            runExceptT $
-            Twitch.downloadVideo
-              (_ssAwsCredentials state)
-              (_ssTwitchClientEnv state)
-              video
-          either (\e -> throwError err400 {errBody = LBS8.pack e}) pure ei
-          pure video
-        Nothing -> throwError err400
-    syncVideos :: SyncVideosRequest -> Handler ()
-    syncVideos (SyncVideosRequest user_id user_name) = do
+      video <-
+        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId video_id))
+      liftIO
+        (runSql (ESQ.getBy (DB.UniqueVideoUrlVideoId (DB.entityKey video)))) >>= \case
+        Just (DB.entityVal -> video_url) -> pure $ DB.vuUrl video_url
+        Nothing -> do
+          runExceptT
+            (Twitch.downloadVideo
+               (_ssAwsCredentials state)
+               (_ssTwitchClientEnv state)
+               (fromDatabase (DB.entityVal video))) >>= \case
+            Left err -> throwError err400 {errBody = LBS8.pack err}
+            Right url -> do
+              liftIO $
+                runSql $ ESQ.insert (DB.VideoUrl (DB.entityKey video) url)
+              pure url
+    syncVideos :: T.Text -> Handler ()
+    syncVideos channel_id = do
       state <- liftIO $ readIORef state_ref
+      (DB.entityVal -> channel) <-
+        sqlFindOr404 sqlCtrl "Channel" $
+        ESQ.getBy (DB.UniqueChannelId channel_id)
       let clientEnv = _ssTwitchClientEnv state
-      liftIO (runClientM (Twitch.listPaginatedVideos (Just user_id)) clientEnv) >>= \case
+      liftIO
+        (runClientM
+           (Twitch.listPaginatedVideos (Just (DB.chChId channel)))
+           clientEnv) >>= \case
         Left clientErr ->
           throwError err500 {errBody = LBS8.pack (show clientErr)}
-        Right videos -> do
+        Right (Set.toList -> videos) -> do
           liftIO $ runSql $ DB.putMany $ map toDatabase videos
           let videoIds = map Twitch._vId videos
           liftIO
             (runClientM
                (Twitch.listPaginatedClips
-                  (Just (T.unpack user_name))
+                  (Just (T.unpack (DB.chDisplayName channel)))
                   ((`elem` videoIds) . Twitch._cvId . Twitch._cVod))
                clientEnv) >>= \case
             Left clientErr ->
               throwError err500 {errBody = LBS8.pack (show clientErr)}
-            Right clips -> liftIO $ runSql $ DB.putMany $ map toDatabase clips
+            Right (Set.toList -> clips) ->
+              liftIO $ runSql $ DB.putMany $ map toDatabase clips
     listClips :: VideoId -> Handler [Twitch.Clip]
     listClips video_id =
       liftIO $
@@ -175,15 +200,30 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
          ESQ.from $ \v -> do
            ESQ.where_ ((v ESQ.^. DB.CVodId) ESQ.==. (ESQ.val video_id))
            return v)
+    syncClips :: VideoId -> Handler ()
+    syncClips video_id = do
+      state <- liftIO $ readIORef state_ref
+      let clientEnv = _ssTwitchClientEnv state
+      (fromDatabase . DB.entityVal -> video) <-
+        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId video_id))
+      liftIO
+        (runClientM
+           (Twitch.listPaginatedClips
+              (Just (T.unpack (Twitch._vUserName video)))
+              ((== video_id) . Twitch._cvId . Twitch._cVod))
+           clientEnv) >>= \case
+        Left clientErr ->
+          throwError err500 {errBody = LBS8.pack (show clientErr)}
+        Right (Set.toList -> clips) ->
+          liftIO $ runSql $ DB.putMany $ map toDatabase clips
     getVideoAnalysis :: VideoId -> Handler Twitch.VideoAnalytics
-    getVideoAnalysis video_id =
-      liftIO (runSql (ESQ.getBy (DB.UniqueVideoId video_id))) >>= \case
-        Nothing -> throwError err404 {errBody = "Could not find the video."}
-        Just (fromDatabase . DB.entityVal -> video) -> do
-          clips <- listClips video_id
-          runExceptT (Twitch.analyse video clips) >>= \case
-            Left err -> throwError err500 {errBody = LBS8.pack err}
-            Right v -> pure v
+    getVideoAnalysis video_id = do
+      (fromDatabase . DB.entityVal -> video) <-
+        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId video_id))
+      clips <- listClips video_id
+      runExceptT (Twitch.analyse video clips) >>= \case
+        Left err -> throwError err500 {errBody = LBS8.pack err}
+        Right v -> pure v
 
 myApi :: Proxy API
 myApi = Proxy
@@ -206,5 +246,3 @@ appCorsResourcePolicy =
     { corsMethods = ["OPTIONS", "GET", "PUT", "POST"]
     , corsRequestHeaders = ["Authorization", "Content-Type"]
     }
-
-$(JSON.deriveJSON jsonPrefix ''SyncVideosRequest)

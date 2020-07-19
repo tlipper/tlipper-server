@@ -1,4 +1,6 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -14,9 +16,12 @@ import qualified Data.Aeson as JSON
 import Data.Aeson.Casing
 import qualified Data.Aeson.TH as JSON
 import Data.ByteString.Char8 (pack)
+import Data.Maybe (mapMaybe)
 import Data.Proxy
+import qualified Data.Set as Set
 import Data.String (IsString)
 import qualified Data.Text as T
+import Debug.Trace (trace)
 import GHC.Generics
 import Network.HTTP.Client (ManagerSettings(..), Request(..))
 import Network.HTTP.Client.TLS
@@ -34,7 +39,7 @@ data Channel =
     , _chTitle :: T.Text
     , _chStartedAt :: T.Text
     }
-  deriving (Generic, Show, Eq)
+  deriving (Generic, Show, Eq, Ord)
 
 data Video =
   Video
@@ -53,23 +58,23 @@ data Video =
     , _vType :: T.Text
     , _vDuration :: T.Text
     }
-  deriving (Generic, Show, Eq)
+  deriving (Generic, Show, Eq, Ord)
 
 data ClipVod =
   ClipVod
     { _cvId :: T.Text
     , _cvUrl :: T.Text
     }
-  deriving (Generic, Show, Eq)
+  deriving (Generic, Show, Eq, Ord)
 
-data Clip =
+data Clip' vod =
   Clip
     { _cSlug :: T.Text
     , _cTrackingId :: T.Text
     , _cUrl :: T.Text
     , _cEmbedUrl :: T.Text
     , _cEmbedHtml :: T.Text
-    , _cVod :: ClipVod
+    , _cVod :: vod
     , _cGame :: T.Text
     , _cLanguage :: T.Text
     , _cTitle :: T.Text
@@ -77,7 +82,11 @@ data Clip =
     , _cDuration :: Double
     , _cCreatedAt :: T.Text
     }
-  deriving (Generic, Show, Eq)
+  deriving (Generic, Show, Eq, Ord)
+
+type Clip = Clip' ClipVod
+
+type ResponseClip = Clip' (Maybe ClipVod)
 
 data ListVideosResponse =
   ListVideosResponse
@@ -95,7 +104,7 @@ data SearchChannelsResponse =
 
 data ListClipsResponse =
   ListClipsResponse
-    { _lcrClips :: [Clip]
+    { _lcrClips :: [ResponseClip]
     , _lcr_Cursor :: Maybe String
     }
   deriving (Show)
@@ -107,49 +116,68 @@ data Pagination cursor =
   deriving (Generic, Show, Eq)
 
 searchChannels :: T.Text -> Maybe String -> ClientM SearchChannelsResponse
-listVideos :: Maybe Int -> Maybe String -> ClientM ListVideosResponse
+listVideos ::
+     Maybe Int -> Maybe T.Text -> Maybe String -> ClientM ListVideosResponse
 listClips ::
-     Maybe String -> Maybe Int -> Maybe String -> ClientM ListClipsResponse
+     Maybe String
+  -> Maybe Int
+  -> Maybe String
+  -> Maybe String
+  -> ClientM ListClipsResponse
 searchChannels :<|> listVideos :<|> listClips = client api
 
-searchPaginatedChannels :: T.Text -> ClientM [Channel]
+filterOutNonVodClips :: [ResponseClip] -> [Clip]
+filterOutNonVodClips =
+  mapMaybe $ \c ->
+    case _cVod c of
+      Nothing -> Nothing
+      Just vod -> Just $ c {_cVod = vod}
+
+searchPaginatedChannels :: T.Text -> ClientM (Set.Set Channel)
 searchPaginatedChannels channelName =
   paginate
     (searchChannels channelName)
     _scrData
     (_pCursor . _scrPagination)
     (const True)
+    (_chId)
     500
-    (const (pure ()))
+    (\_ _ -> pure ())
 
-listPaginatedVideos :: Maybe Int -> ClientM [Video]
-listPaginatedVideos mbUserId =
+listPaginatedVideos :: Maybe T.Text -> ClientM (Set.Set Video)
+listPaginatedVideos mbChannelId =
   paginate
-    (listVideos mbUserId)
+    (listVideos (Just 100) mbChannelId)
     _lvrData
     (_pCursor . _lvrPagination)
     (const True)
-    500
-    (const (pure ()))
+    (_vId)
+    10000
+    (\p r ->
+       liftIO $
+       putStrLn $ "[Videos] Page: " <> show p <> ", Results: " <> show r)
 
-listPaginatedClips :: Maybe String -> (Clip -> Bool) -> ClientM [Clip]
-listPaginatedClips mbUserId chunkFilter =
+listPaginatedClips :: Maybe String -> (Clip -> Bool) -> ClientM (Set.Set Clip)
+listPaginatedClips mbUserName chunkFilter = do
+  liftIO $ putStrLn "paginating..."
   paginate
-    (listClips mbUserId (Just 100))
-    _lcrClips
+    (listClips mbUserName (Just 100) (Just "all"))
+    (filterOutNonVodClips . _lcrClips)
     (_lcr_Cursor)
     chunkFilter
-    100000
-    (liftIO . print)
+    (_cTrackingId)
+    1000000
+    (\p r ->
+       liftIO $ putStrLn $ "[Clips] Page: " <> show p <> ", Results: " <> show r)
 
 type SearchChannels
    = "helix" :> "search" :> "channels" :> QueryParam' '[ Required] "query" T.Text :> QueryParam "after" String :> Get '[ JSON] SearchChannelsResponse
 
 type ListVideos
-   = "helix" :> "videos" :> QueryParam "user_id" Int :> QueryParam "after" String :> Get '[ JSON] ListVideosResponse
+   = "helix" :> "videos" :> QueryParam "first" Int :> QueryParam "user_id" T.Text :> QueryParam "after" String :> Get '[ JSON] ListVideosResponse
 
 type ListClips
-   = "kraken" :> "clips" :> "top" :> QueryParam "channel" String :> QueryParam "limit" Int :> QueryParam "cursor" String :> Get '[ JSON] ListClipsResponse
+   = "kraken" :> "clips" :> "top" :> QueryParam "channel" String :> QueryParam "limit" Int :> QueryParam "period" String :> QueryParam "cursor" String :> Get '[ JSON] ListClipsResponse
 
 type API = SearchChannels :<|> ListVideos :<|> ListClips
 
@@ -157,7 +185,8 @@ api :: Proxy API
 api = Proxy
 
 paginate ::
-     forall resp result cursor m value. (Monad m, Eq cursor)
+     forall resp result cursor m value key.
+     (Monad m, Eq cursor, Eq key, Ord key, Ord value, Show value)
   => (Maybe cursor -> m resp)
   -- ^ Given an optional pagination cursor, run the request
   -> (resp -> [value])
@@ -166,33 +195,50 @@ paginate ::
   -- ^ Pick possible pagination cursor from the response
   -> (value -> Bool)
   -- ^ Filter for the chunks of paginated data
+  -> (value -> key)
+  -- ^ Unique identifier for paginated data
   -> Int
   -- ^ Limit the overall results.
-  -> (Int -> m ())
-  -- ^ Do some action with the page number.
-  -> m [value]
+  -> (Int -> Int -> m ())
+  -- ^ Do some action with the page number & result length.
+  -> m (Set.Set value)
   -- ^ Combined results
-paginate act getResult getPaginationCursor chunkFilter limit sideEffect = do
+paginate act getResult getPaginationCursor chunkFilter uniqueIdentifier limit sideEffect = do
   resp <- act Nothing
   case getPaginationCursor resp of
-    Nothing -> pure $ take limit $ filter chunkFilter $ getResult resp
+    Nothing -> do
+      let results =
+            Set.take limit $
+            Set.filter chunkFilter $ Set.fromList $ getResult resp
+      sideEffect (-1) (length results)
+      pure results
     (Just cursor) -> do
-      go 1 (filter chunkFilter (getResult resp)) cursor
+      let filteredResults =
+            Set.filter chunkFilter $ Set.fromList $ getResult resp
+      let keys = Set.map uniqueIdentifier filteredResults
+      go 1 filteredResults keys cursor
   where
-    go :: Int -> [value] -> cursor -> m [value]
-    go page results cursor = do
-      sideEffect page
-      if length results >= limit
-        then pure $ take limit $ results
-        else do
-          resp <- act (Just cursor)
-          let newResults = filter chunkFilter (getResult resp)
-          case ( length (results <> newResults) >= limit
-               , getPaginationCursor resp) of
-            (False, Just newCursor)
-              | cursor /= newCursor ->
-                go (page + 1) (results <> newResults) newCursor
-            _ -> pure $ take limit $ results <> newResults
+    go :: Int -> Set.Set value -> Set.Set key -> cursor -> m (Set.Set value)
+    go page results keys cursor = do
+      sideEffect page (length results)
+      if | Set.size results >= limit -> pure $ Set.take limit $ results
+         | otherwise ->
+           do resp <- act (Just cursor)
+              let newResults =
+                    Set.filter chunkFilter $ Set.fromList $ getResult resp
+              if newResults `Set.isSubsetOf` results
+                then pure results
+                else do
+                  case ( length (results <> newResults) >= limit
+                       , getPaginationCursor resp) of
+                    (False, Just newCursor)
+                      | cursor /= newCursor ->
+                        go
+                          (page + 1)
+                          (results <> newResults)
+                          (keys <> Set.map uniqueIdentifier newResults)
+                          newCursor
+                    _ -> pure $ Set.take limit $ results <> newResults
 
 twitchAPIBaseUrl :: IsString s => s
 twitchAPIBaseUrl = "https://api.twitch.tv/"
@@ -224,7 +270,7 @@ $(JSON.deriveJSON jsonPrefix ''Video)
 
 $(JSON.deriveJSON jsonPrefix ''ClipVod)
 
-$(JSON.deriveJSON jsonPrefix ''Clip)
+$(JSON.deriveJSON jsonPrefix ''Clip')
 
 $(JSON.deriveJSON jsonPrefix ''Pagination)
 

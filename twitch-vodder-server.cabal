@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: bdbd2049c3cfa5e698794ea40e3d2bc5b7974104e41b552d0008a3f1620804ca
+-- hash: 0bc0137a04c973e130ad2a64f51344149603831be176253cf438cfa87299889f
 
 name:           twitch-vodder-server
 version:        0.1.0.0
@@ -38,6 +38,7 @@ executable twitch-vodder-server-exe
       Twitch.API
       Twitch.Utils
       Twitch.Vod
+      Utils
       Paths_twitch_vodder_server
   hs-source-dirs:
       src
@@ -51,6 +52,7 @@ executable twitch-vodder-server-exe
     , base >=4.7 && <5
     , bytestring
     , conduit
+    , containers
     , dotenv
     , esqueleto
     , http-client

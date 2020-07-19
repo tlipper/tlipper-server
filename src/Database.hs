@@ -36,6 +36,7 @@ Channel
     chThumbnailUrl T.Text
     chTitle T.Text
     chStartedAt T.Text
+    UniqueChannelId chChId
 
 Video
     vVid T.Text
@@ -70,6 +71,11 @@ Clip
     cDuration Double
     cCreatedAt T.Text
     UniqueClipId cTrackingId
+
+VideoUrl
+    vuVideoId VideoId
+    vuUrl T.Text
+    UniqueVideoUrlVideoId vuVideoId
 |]
 
 data PostgresqlParams =
