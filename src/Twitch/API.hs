@@ -1,4 +1,8 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -11,12 +15,17 @@
 module Twitch.API where
 
 import Aeson.Extra (jsonPrefix)
+import Control.Arrow ((&&&), (>>>))
+import Control.Concurrent.Async.Lifted (forConcurrently)
+import Control.Monad.Except
 import Control.Monad.IO.Class
+import Control.Monad.Trans.Class
 import qualified Data.Aeson as JSON
 import Data.Aeson.Casing
 import qualified Data.Aeson.TH as JSON
 import Data.ByteString.Char8 (pack)
-import Data.Maybe (mapMaybe)
+import Data.IORef
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Proxy
 import qualified Data.Set as Set
 import Data.String (IsString)
@@ -115,6 +124,88 @@ data Pagination cursor =
     }
   deriving (Generic, Show, Eq)
 
+paginateRaw ::
+     forall result cursor e t m value key.
+     (Monad m, Eq cursor, Ord value, Show value)
+  => (Maybe cursor -> m (Maybe cursor, [value]))
+  -- ^ Given an optional pagination cursor, run the request
+  -> Int
+  -- ^ Limit the overall results.
+  -> (Int -> Set.Set value -> m ())
+  -- ^ Do some action with the page number & results.
+  -> m ()
+  -- ^ Combined results
+paginateRaw act limit consumeResults = do
+  (mb_cursor, values) <- act Nothing
+  let results = Set.take limit $ Set.fromList values
+  consumeResults (-1) results
+  case mb_cursor of
+    Nothing -> do
+      pure ()
+    (Just cursor) -> do
+      go 1 (Set.size results) cursor
+  where
+    go :: Int -> Int -> cursor -> m ()
+    go page resultSize cursor = do
+      if | resultSize >= limit -> pure ()
+         | otherwise ->
+           do (mb_cursor, values) <- act (Just cursor)
+              let newResults = Set.fromList values
+              consumeResults page newResults
+              case mb_cursor of
+                (Just newCursor)
+                  | cursor /= newCursor ->
+                    go (page + 1) (resultSize + Set.size newResults) newCursor
+                Nothing -> pure ()
+
+class Paginatable m resource where
+  type Extras resource
+  type Cursor resource
+  fetch ::
+       forall cursor.
+       Extras resource
+    -> Maybe (Cursor resource)
+    -> m (Maybe (Cursor resource), [resource])
+  paginate ::
+       Extras resource -> Int -> (Int -> Set.Set resource -> m ()) -> m ()
+
+instance Paginatable ClientM Channel where
+  type Extras Channel = T.Text -- Channel name
+  type Cursor Channel = String
+  fetch channel_name mb_cursor = do
+    resp <- searchChannels channel_name mb_cursor
+    pure $ (_pCursor . _scrPagination &&& _scrData) resp
+  paginate = paginateRaw . fetch
+
+instance Paginatable ClientM Video where
+  type Extras Video = Maybe T.Text -- Maybe channel id
+  type Cursor Video = String
+  fetch mb_channel_id mb_cursor = do
+    resp <- listVideos (Just 100) mb_channel_id mb_cursor
+    pure $ (_pCursor . _lvrPagination &&& _lvrData) resp
+  paginate = paginateRaw . fetch
+
+instance Paginatable ClientM (Clip' ClipVod) where
+  type Extras Clip = Maybe String -- Maybe user name
+  type Cursor Clip = String
+  fetch mb_user_name mb_cursor = do
+    fmap mconcat $
+      forConcurrently ["day", "week", "all"] $ \window -> do
+        resp <- listClips mb_user_name (Just 100) (Just window) mb_cursor
+        pure $ (_lcr_Cursor &&& filterOutNonVodClips . _lcrClips) resp
+  paginate = paginateRaw . fetch
+
+paginateBlocking ::
+     (MonadIO m, Paginatable m resource, Ord resource)
+  => Extras resource
+  -> Int
+  -> m (Set.Set resource)
+paginateBlocking extras limit = do
+  results_ref <- liftIO $ newIORef Set.empty
+  paginate extras limit $ \_page results ->
+    liftIO $ atomicModifyIORef' results_ref $ \s -> (s <> results, ())
+  liftIO $ readIORef results_ref
+
 searchChannels :: T.Text -> Maybe String -> ClientM SearchChannelsResponse
 listVideos ::
      Maybe Int -> Maybe T.Text -> Maybe String -> ClientM ListVideosResponse
@@ -133,42 +224,51 @@ filterOutNonVodClips =
       Nothing -> Nothing
       Just vod -> Just $ c {_cVod = vod}
 
-searchPaginatedChannels :: T.Text -> ClientM (Set.Set Channel)
-searchPaginatedChannels channelName =
-  paginate
-    (searchChannels channelName)
-    _scrData
-    (_pCursor . _scrPagination)
-    (const True)
-    (_chId)
+searchPaginatedChannels ::
+     T.Text -> (Int -> Set.Set Channel -> ClientM ()) -> ClientM ()
+searchPaginatedChannels channelName consumeResults =
+  paginateRaw
+    -- First fmap is for arrow functor ((->) a), second one is for ClientM. Sorry reader.
+    (fmap (_pCursor . _scrPagination &&& _scrData) <$>
+     searchChannels channelName)
     500
-    (\_ _ -> pure ())
+    consumeResults
 
-listPaginatedVideos :: Maybe T.Text -> ClientM (Set.Set Video)
-listPaginatedVideos mbChannelId =
-  paginate
-    (listVideos (Just 100) mbChannelId)
-    _lvrData
-    (_pCursor . _lvrPagination)
-    (const True)
-    (_vId)
+listPaginatedVideos ::
+     Maybe T.Text -> (Int -> Set.Set Video -> ClientM ()) -> ClientM ()
+listPaginatedVideos mbChannelId consumeResults =
+  paginateRaw
+    (fmap (_pCursor . _lvrPagination &&& _lvrData) <$>
+     listVideos (Just 100) mbChannelId)
     10000
-    (\p r ->
+    (\p r -> do
        liftIO $
-       putStrLn $ "[Videos] Page: " <> show p <> ", Results: " <> show r)
+         putStrLn $
+         "[Videos] Page: " <> show p <> ", Results: " <> show (Set.size r)
+       consumeResults p r)
 
-listPaginatedClips :: Maybe String -> (Clip -> Bool) -> ClientM (Set.Set Clip)
-listPaginatedClips mbUserName chunkFilter = do
+listPaginatedClips ::
+     Maybe String
+  -> (Clip -> Bool)
+  -> (Int -> Set.Set Clip -> ClientM ())
+  -> ClientM ()
+listPaginatedClips mbUserName chunkFilter consumeResults = do
   liftIO $ putStrLn "paginating..."
-  paginate
-    (listClips mbUserName (Just 100) (Just "all"))
-    (filterOutNonVodClips . _lcrClips)
-    (_lcr_Cursor)
-    chunkFilter
-    (_cTrackingId)
-    1000000
-    (\p r ->
-       liftIO $ putStrLn $ "[Clips] Page: " <> show p <> ", Results: " <> show r)
+  fmap mconcat $
+    forConcurrently ["day", "week", "all"] $ \window ->
+      paginateRaw
+        (fmap (_lcr_Cursor &&& filterOutNonVodClips . _lcrClips) <$>
+         listClips mbUserName (Just 100) (Just window))
+        1000
+        (\p r -> do
+           liftIO $
+             putStrLn $
+             "[" <>
+             window <>
+             " Clips of " <>
+             fromMaybe "<unknown>" mbUserName <>
+             "] Page: " <> show p <> ", Results: " <> show r
+           consumeResults p r)
 
 type SearchChannels
    = "helix" :> "search" :> "channels" :> QueryParam' '[ Required] "query" T.Text :> QueryParam "after" String :> Get '[ JSON] SearchChannelsResponse
@@ -183,62 +283,6 @@ type API = SearchChannels :<|> ListVideos :<|> ListClips
 
 api :: Proxy API
 api = Proxy
-
-paginate ::
-     forall resp result cursor m value key.
-     (Monad m, Eq cursor, Eq key, Ord key, Ord value, Show value)
-  => (Maybe cursor -> m resp)
-  -- ^ Given an optional pagination cursor, run the request
-  -> (resp -> [value])
-  -- ^ Pick result set from the response
-  -> (resp -> Maybe cursor)
-  -- ^ Pick possible pagination cursor from the response
-  -> (value -> Bool)
-  -- ^ Filter for the chunks of paginated data
-  -> (value -> key)
-  -- ^ Unique identifier for paginated data
-  -> Int
-  -- ^ Limit the overall results.
-  -> (Int -> Int -> m ())
-  -- ^ Do some action with the page number & result length.
-  -> m (Set.Set value)
-  -- ^ Combined results
-paginate act getResult getPaginationCursor chunkFilter uniqueIdentifier limit sideEffect = do
-  resp <- act Nothing
-  case getPaginationCursor resp of
-    Nothing -> do
-      let results =
-            Set.take limit $
-            Set.filter chunkFilter $ Set.fromList $ getResult resp
-      sideEffect (-1) (length results)
-      pure results
-    (Just cursor) -> do
-      let filteredResults =
-            Set.filter chunkFilter $ Set.fromList $ getResult resp
-      let keys = Set.map uniqueIdentifier filteredResults
-      go 1 filteredResults keys cursor
-  where
-    go :: Int -> Set.Set value -> Set.Set key -> cursor -> m (Set.Set value)
-    go page results keys cursor = do
-      sideEffect page (length results)
-      if | Set.size results >= limit -> pure $ Set.take limit $ results
-         | otherwise ->
-           do resp <- act (Just cursor)
-              let newResults =
-                    Set.filter chunkFilter $ Set.fromList $ getResult resp
-              if newResults `Set.isSubsetOf` results
-                then pure results
-                else do
-                  case ( length (results <> newResults) >= limit
-                       , getPaginationCursor resp) of
-                    (False, Just newCursor)
-                      | cursor /= newCursor ->
-                        go
-                          (page + 1)
-                          (results <> newResults)
-                          (keys <> Set.map uniqueIdentifier newResults)
-                          newCursor
-                    _ -> pure $ Set.take limit $ results <> newResults
 
 twitchAPIBaseUrl :: IsString s => s
 twitchAPIBaseUrl = "https://api.twitch.tv/"

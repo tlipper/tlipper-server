@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -36,7 +37,7 @@ import Network.Wai (Middleware)
 import qualified Network.Wai.Handler.Warp as Warp
 import Network.Wai.Middleware.Cors
 import Servant
-import Servant.Client (ClientEnv, runClientM)
+import Servant.Client (ClientEnv, ClientM, runClientM)
 import Servant.Server
 import qualified Twitch.API as Twitch
 import qualified Twitch.Analytics as Twitch
@@ -108,6 +109,12 @@ sqlFindOr404 (DB.SqlCtrl runSql) resourceName uniqueRecord =
               "Could not find the " <> LBS8.pack resourceName <> " resource."
           }
 
+runLiftedClientM :: ClientM a -> ClientEnv -> Handler a
+runLiftedClientM act env =
+  liftIO (runClientM act env) >>= \case
+    Left clientErr -> throwError err500 {errBody = LBS8.pack (show clientErr)}
+    Right result -> pure result
+
 server :: IORef ServerState -> DB.SqlCtrl -> Server API
 server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
   listChannels :<|> addChannel :<|> listVideos :<|> downloadVideo :<|>
@@ -123,17 +130,13 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
     addChannel channel_name = do
       state <- liftIO $ readIORef state_ref
       let clientEnv = _ssTwitchClientEnv state
-      liftIO
-        (runClientM (Twitch.searchPaginatedChannels channel_name) clientEnv) >>= \case
-        Left clientErr ->
-          throwError err500 {errBody = LBS8.pack (show clientErr)}
-        Right channels -> do
-          case find ((== channel_name) . Twitch._chDisplayName) channels of
-            Nothing ->
-              throwError err404 {errBody = "Could not find the channel."}
-            Just c -> do
-              liftIO $ runSql $ ESQ.insert (toDatabase c)
-              pure c
+      channels <-
+        runLiftedClientM (Twitch.paginateBlocking channel_name 100) clientEnv
+      case find ((== channel_name) . Twitch._chDisplayName) channels of
+        Nothing -> throwError err404 {errBody = "Could not find the channel."}
+        Just c -> do
+          liftIO $ runSql $ ESQ.insert (toDatabase c)
+          pure c
     listVideos :: T.Text -> Handler [Twitch.Video]
     listVideos channel_id = do
       state <- liftIO $ readIORef state_ref
@@ -172,25 +175,14 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
         sqlFindOr404 sqlCtrl "Channel" $
         ESQ.getBy (DB.UniqueChannelId channel_id)
       let clientEnv = _ssTwitchClientEnv state
-      liftIO
-        (runClientM
-           (Twitch.listPaginatedVideos (Just (DB.chChId channel)))
-           clientEnv) >>= \case
-        Left clientErr ->
-          throwError err500 {errBody = LBS8.pack (show clientErr)}
-        Right (Set.toList -> videos) -> do
-          liftIO $ runSql $ DB.putMany $ map toDatabase videos
-          let videoIds = map Twitch._vId videos
-          liftIO
-            (runClientM
-               (Twitch.listPaginatedClips
-                  (Just (T.unpack (DB.chDisplayName channel)))
-                  ((`elem` videoIds) . Twitch._cvId . Twitch._cVod))
-               clientEnv) >>= \case
-            Left clientErr ->
-              throwError err500 {errBody = LBS8.pack (show clientErr)}
-            Right (Set.toList -> clips) ->
-              liftIO $ runSql $ DB.putMany $ map toDatabase clips
+      (Set.toList -> videos) <- flip runLiftedClientM clientEnv $ Twitch.paginateBlocking (Just (DB.chChId channel)) 1000
+      liftIO $ runSql $ DB.putMany $ map toDatabase videos
+      let videoIds = map Twitch._vId videos
+      flip runLiftedClientM clientEnv $
+        Twitch.paginate (Just (T.unpack (DB.chDisplayName channel))) 1000 $ \_ (Set.toList -> clips) -> do
+          let filtered_clips =
+                filter ((`elem` videoIds) . Twitch._cvId . Twitch._cVod) clips
+          liftIO $ runSql $ DB.putMany $ map toDatabase filtered_clips
     listClips :: VideoId -> Handler [Twitch.Clip]
     listClips video_id =
       liftIO $
@@ -206,16 +198,11 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
       let clientEnv = _ssTwitchClientEnv state
       (fromDatabase . DB.entityVal -> video) <-
         sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId video_id))
-      liftIO
-        (runClientM
-           (Twitch.listPaginatedClips
-              (Just (T.unpack (Twitch._vUserName video)))
-              ((== video_id) . Twitch._cvId . Twitch._cVod))
-           clientEnv) >>= \case
-        Left clientErr ->
-          throwError err500 {errBody = LBS8.pack (show clientErr)}
-        Right (Set.toList -> clips) ->
-          liftIO $ runSql $ DB.putMany $ map toDatabase clips
+      flip runLiftedClientM clientEnv $
+        Twitch.paginate (Just (T.unpack (Twitch._vUserName video))) 1000 $ \_ (Set.toList -> clips) -> do
+          let filtered_clips =
+                filter ((== video_id) . Twitch._cvId . Twitch._cVod) clips
+          liftIO $ runSql $ DB.putMany $ map toDatabase filtered_clips
     getVideoAnalysis :: VideoId -> Handler Twitch.VideoAnalytics
     getVideoAnalysis video_id = do
       (fromDatabase . DB.entityVal -> video) <-

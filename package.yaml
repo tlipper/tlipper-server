@@ -62,6 +62,7 @@ executables:
     - time
     - attoparsec
     - containers
+    - transformers
 
 tests:
   twitch-vodder-server-test:

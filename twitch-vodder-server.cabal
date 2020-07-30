@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0bc0137a04c973e130ad2a64f51344149603831be176253cf438cfa87299889f
+-- hash: 1657898e1100675b644551a8f39803de954f87942f84320455fe4cc23072ec9b
 
 name:           twitch-vodder-server
 version:        0.1.0.0
@@ -73,6 +73,7 @@ executable twitch-vodder-server-exe
     , servant-server
     , text
     , time
+    , transformers
     , wai
     , wai-cors
     , warp
