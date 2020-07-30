@@ -1,6 +1,6 @@
-name:                twitch-vodder-server
+name:                tlipper-server
 version:             0.1.0.0
-github:              "yigitozkavci/twitch-vodder-server"
+github:              "yigitozkavci/tlipper-server"
 license:             BSD3
 author:              "Yigit Ozkavci"
 maintainer:          "yigitozkavci@"
@@ -17,13 +17,13 @@ extra-source-files:
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/githubuser/twitch-vodder-server#readme>
+description:         Please see the README on GitHub at <https://github.com/githubuser/tlipper-server#readme>
 
 dependencies:
 - base >= 4.7 && < 5
 
 executables:
-  twitch-vodder-server-exe:
+  tlipper-server-exe:
     main:                Main.hs
     source-dirs:         src
     ghc-options:
@@ -63,14 +63,3 @@ executables:
     - attoparsec
     - containers
     - transformers
-
-tests:
-  twitch-vodder-server-test:
-    main:                Spec.hs
-    source-dirs:         test
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - twitch-vodder-server

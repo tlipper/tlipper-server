@@ -4,13 +4,13 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 1657898e1100675b644551a8f39803de954f87942f84320455fe4cc23072ec9b
+-- hash: d97c356e0da851c7c72f946923f33ac20f2fc58925ad8cf6cd5826dd7ec773a4
 
-name:           twitch-vodder-server
+name:           tlipper-server
 version:        0.1.0.0
-description:    Please see the README on GitHub at <https://github.com/githubuser/twitch-vodder-server#readme>
-homepage:       https://github.com/yigitozkavci/twitch-vodder-server#readme
-bug-reports:    https://github.com/yigitozkavci/twitch-vodder-server/issues
+description:    Please see the README on GitHub at <https://github.com/githubuser/tlipper-server#readme>
+homepage:       https://github.com/yigitozkavci/tlipper-server#readme
+bug-reports:    https://github.com/yigitozkavci/tlipper-server/issues
 author:         Yigit Ozkavci
 maintainer:     yigitozkavci@
 copyright:      2020 Yigit Ozkavci
@@ -23,9 +23,9 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: https://github.com/yigitozkavci/twitch-vodder-server
+  location: https://github.com/yigitozkavci/tlipper-server
 
-executable twitch-vodder-server-exe
+executable tlipper-server-exe
   main-is: Main.hs
   other-modules:
       Aeson.Extra
@@ -39,7 +39,7 @@ executable twitch-vodder-server-exe
       Twitch.Utils
       Twitch.Vod
       Utils
-      Paths_twitch_vodder_server
+      Paths_tlipper_server
   hs-source-dirs:
       src
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
@@ -77,17 +77,4 @@ executable twitch-vodder-server-exe
     , wai
     , wai-cors
     , warp
-  default-language: Haskell2010
-
-test-suite twitch-vodder-server-test
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  other-modules:
-      Paths_twitch_vodder_server
-  hs-source-dirs:
-      test
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
-  build-depends:
-      base >=4.7 && <5
-    , twitch-vodder-server
   default-language: Haskell2010
