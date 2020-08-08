@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: d97c356e0da851c7c72f946923f33ac20f2fc58925ad8cf6cd5826dd7ec773a4
+-- hash: 16d65fbd93b73764f40a33d937b27e3656f1de4da135ba976b20c97778b12a49
 
 name:           tlipper-server
 version:        0.1.0.0
@@ -76,5 +76,6 @@ executable tlipper-server-exe
     , transformers
     , wai
     , wai-cors
+    , wai-logger
     , warp
   default-language: Haskell2010

@@ -63,3 +63,4 @@ executables:
     - attoparsec
     - containers
     - transformers
+    - wai-logger

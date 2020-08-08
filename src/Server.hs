@@ -35,6 +35,7 @@ import Database.Persist
 import GHC.Generics
 import Network.Wai (Middleware)
 import qualified Network.Wai.Handler.Warp as Warp
+import Network.Wai.Logger (withStdoutLogger)
 import Network.Wai.Middleware.Cors
 import Servant
 import Servant.Client (ClientEnv, ClientM, runClientM)
@@ -42,6 +43,26 @@ import Servant.Server
 import qualified Twitch.API as Twitch
 import qualified Twitch.Analytics as Twitch
 import qualified Twitch.Vod as Twitch
+
+data ExportSegment =
+  ExportSegment
+    { _esStartTimestamp :: Integer
+    , _esEndTimestamp :: Integer
+    }
+  deriving (Show)
+
+data TakeExportRequest =
+  TakeExportRequest
+    { _terVideoId :: VideoId
+    , _terExportSegments :: [ExportSegment]
+    }
+  deriving (Show)
+
+data TakeExportResponse =
+  TakeExportResponse
+    { _terExportId :: Key DB.Export -- It's a very bad idea to couple DB type in response type. Refactor this.
+    }
+  deriving (Show)
 
 type VideoId = T.Text
 
@@ -70,8 +91,11 @@ type DownloadVideo
 type SyncVideo
    = "videos" :> "sync" :> QueryParam' '[ Required] "channel_id" T.Text :> Post '[ JSON] ()
 
+type TakeExport
+   = "exports" :> ReqBody '[ JSON] TakeExportRequest :> Post '[ JSON] TakeExportResponse
+
 type API
-   = ListChannels :<|> AddChannel :<|> ListVideos :<|> DownloadVideo :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis
+   = ListChannels :<|> AddChannel :<|> ListVideos :<|> DownloadVideo :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis :<|> TakeExport
 
 data ServerState =
   ServerState
@@ -121,7 +145,8 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
   syncVideos :<|>
   listClips :<|>
   syncClips :<|>
-  getVideoAnalysis
+  getVideoAnalysis :<|>
+  takeExport
   where
     listChannels :: Handler [Twitch.Channel]
     listChannels = do
@@ -175,7 +200,9 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
         sqlFindOr404 sqlCtrl "Channel" $
         ESQ.getBy (DB.UniqueChannelId channel_id)
       let clientEnv = _ssTwitchClientEnv state
-      (Set.toList -> videos) <- flip runLiftedClientM clientEnv $ Twitch.paginateBlocking (Just (DB.chChId channel)) 1000
+      (Set.toList -> videos) <-
+        flip runLiftedClientM clientEnv $
+        Twitch.paginateBlocking (Just (DB.chChId channel)) 1000
       liftIO $ runSql $ DB.putMany $ map toDatabase videos
       let videoIds = map Twitch._vId videos
       flip runLiftedClientM clientEnv $
@@ -211,6 +238,10 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
       runExceptT (Twitch.analyse video clips) >>= \case
         Left err -> throwError err500 {errBody = LBS8.pack err}
         Right v -> pure v
+    takeExport :: TakeExportRequest -> Handler TakeExportResponse
+    takeExport (TakeExportRequest videoId segments) = do
+      exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing
+      pure $ TakeExportResponse exportId
 
 myApi :: Proxy API
 myApi = Proxy
@@ -222,7 +253,10 @@ runServer :: ClientEnv -> AWS.Credentials -> Int -> DB.SqlCtrl -> IO ()
 runServer twitchClientEnv awsCredentials port sqlCtrl = do
   state <- newIORef (ServerState twitchClientEnv awsCredentials)
   putStrLn $ "Server is running on port " <> show port <> "..."
-  Warp.run port (app state sqlCtrl)
+  withStdoutLogger $ \logger ->
+    let settings =
+          Warp.setPort port $ Warp.setLogger logger Warp.defaultSettings
+     in Warp.runSettings settings (app state sqlCtrl)
 
 allowCors :: Middleware
 allowCors = cors (const $ Just appCorsResourcePolicy)
@@ -233,3 +267,9 @@ appCorsResourcePolicy =
     { corsMethods = ["OPTIONS", "GET", "PUT", "POST"]
     , corsRequestHeaders = ["Authorization", "Content-Type"]
     }
+
+$(JSON.deriveJSON jsonPrefix ''TakeExportRequest)
+
+$(JSON.deriveJSON jsonPrefix ''TakeExportResponse)
+
+$(JSON.deriveJSON jsonPrefix ''ExportSegment)

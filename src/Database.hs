@@ -76,6 +76,9 @@ VideoUrl
     vuVideoId VideoId
     vuUrl T.Text
     UniqueVideoUrlVideoId vuVideoId
+
+Export
+    eUrl T.Text Maybe
 |]
 
 data PostgresqlParams =
