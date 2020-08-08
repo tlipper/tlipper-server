@@ -13,6 +13,8 @@ module Server where
 
 import Aeson.Extra (jsonPrefix)
 import Conduit
+import Control.Arrow ((&&&))
+import Control.Concurrent.Async.Lifted (async)
 import Control.Monad.Except
 import Control.Monad.IO.Class
 import Control.Monad.Logger
@@ -46,8 +48,8 @@ import qualified Twitch.Vod as Twitch
 
 data ExportSegment =
   ExportSegment
-    { _esStartTimestamp :: Integer
-    , _esEndTimestamp :: Integer
+    { _esStartTimestamp :: Int
+    , _esEndTimestamp :: Int
     }
   deriving (Show)
 
@@ -85,9 +87,8 @@ type SyncClips
 type GetVideoAnalysis
    = "videos" :> Capture' '[ Required] "video_id" VideoId :> "analysis" :> Get '[ JSON] Twitch.VideoAnalytics
 
-type DownloadVideo
-   = "download" :> ReqBody '[ JSON] VideoId :> Post '[ JSON] T.Text
-
+-- type DownloadVideo
+--    = "download" :> ReqBody '[ JSON] VideoId :> Post '[ JSON] T.Text
 type SyncVideo
    = "videos" :> "sync" :> QueryParam' '[ Required] "channel_id" T.Text :> Post '[ JSON] ()
 
@@ -95,7 +96,7 @@ type TakeExport
    = "exports" :> ReqBody '[ JSON] TakeExportRequest :> Post '[ JSON] TakeExportResponse
 
 type API
-   = ListChannels :<|> AddChannel :<|> ListVideos :<|> DownloadVideo :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis :<|> TakeExport
+   = ListChannels :<|> AddChannel :<|> ListVideos :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis :<|> TakeExport
 
 data ServerState =
   ServerState
@@ -141,12 +142,10 @@ runLiftedClientM act env =
 
 server :: IORef ServerState -> DB.SqlCtrl -> Server API
 server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
-  listChannels :<|> addChannel :<|> listVideos :<|> downloadVideo :<|>
-  syncVideos :<|>
-  listClips :<|>
+  listChannels :<|> addChannel :<|> listVideos :<|> syncVideos :<|> listClips :<|>
   syncClips :<|>
   getVideoAnalysis :<|>
-  takeExport
+  takeExportRequest
   where
     listChannels :: Handler [Twitch.Channel]
     listChannels = do
@@ -174,25 +173,24 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
              ESQ.where_ ((v ESQ.^. DB.VUserId) ESQ.==. (ESQ.val channel_id))
              return v)
       pure $ map fromDatabase dbChannels
-    downloadVideo :: VideoId -> Handler T.Text
-    downloadVideo video_id = do
-      state <- liftIO $ readIORef state_ref
-      video <-
-        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId video_id))
-      liftIO
-        (runSql (ESQ.getBy (DB.UniqueVideoUrlVideoId (DB.entityKey video)))) >>= \case
-        Just (DB.entityVal -> video_url) -> pure $ DB.vuUrl video_url
-        Nothing -> do
-          runExceptT
-            (Twitch.downloadVideo
-               (_ssAwsCredentials state)
-               (_ssTwitchClientEnv state)
-               (fromDatabase (DB.entityVal video))) >>= \case
-            Left err -> throwError err400 {errBody = LBS8.pack err}
-            Right url -> do
-              liftIO $
-                runSql $ ESQ.insert (DB.VideoUrl (DB.entityKey video) url)
-              pure url
+    -- downloadVideo :: VideoId -> Handler T.Text
+    -- downloadVideo video_id = do
+    --   state <- liftIO $ readIORef state_ref
+    --   video <-
+    --     sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId video_id))
+    --   liftIO
+    --     (runSql (ESQ.getBy (DB.UniqueVideoUrlVideoId (DB.entityKey video)))) >>= \case
+    --     Just (DB.entityVal -> video_url) -> pure $ DB.vuUrl video_url
+    --     Nothing -> do
+    --       runExceptT
+    --         (Twitch.downloadVideo
+    --            (_ssTwitchClientEnv state)
+    --            (fromDatabase (DB.entityVal video))) >>= \case
+    --         Left err -> throwError err400 {errBody = LBS8.pack err}
+    --         Right url -> do
+    --           liftIO $
+    --             runSql $ ESQ.insert (DB.VideoUrl (DB.entityKey video) url)
+    --           pure url
     syncVideos :: T.Text -> Handler ()
     syncVideos channel_id = do
       state <- liftIO $ readIORef state_ref
@@ -238,10 +236,37 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
       runExceptT (Twitch.analyse video clips) >>= \case
         Left err -> throwError err500 {errBody = LBS8.pack err}
         Right v -> pure v
-    takeExport :: TakeExportRequest -> Handler TakeExportResponse
-    takeExport (TakeExportRequest videoId segments) = do
+    takeExportRequest :: TakeExportRequest -> Handler TakeExportResponse
+    takeExportRequest (TakeExportRequest videoId segments) = do
+      state <- liftIO $ readIORef state_ref
+      let clientEnv = _ssTwitchClientEnv state
       exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing
+      async $ takeExport clientEnv sqlCtrl videoId exportId segments
       pure $ TakeExportResponse exportId
+
+takeExport ::
+     ClientEnv
+  -> DB.SqlCtrl
+  -> VideoId
+  -> DB.Key DB.Export
+  -> [ExportSegment]
+  -> Handler ()
+takeExport _ _ _ _ [] = do
+  liftIO $ putStrLn "Not taking export"
+  pure ()
+takeExport clientEnv sqlCtrl videoId exportId exportSegments = do
+  let serializedSegments =
+        map (_esStartTimestamp &&& _esEndTimestamp) exportSegments
+  liftIO $ putStrLn "Taking export..."
+  video <- sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId videoId))
+  runExceptT
+    (Twitch.downloadVideo
+       clientEnv
+       (fromDatabase (DB.entityVal video))
+       serializedSegments
+       ("exports/" <> show (ESQ.fromSqlKey exportId) <> "/")) >>= \case
+    Left downloadError -> liftIO $ print downloadError
+    Right mp4_filepath -> liftIO $ putStrLn mp4_filepath
 
 myApi :: Proxy API
 myApi = Proxy

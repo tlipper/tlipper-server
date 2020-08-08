@@ -64,3 +64,4 @@ executables:
     - containers
     - transformers
     - wai-logger
+    - directory

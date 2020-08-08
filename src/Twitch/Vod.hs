@@ -22,6 +22,7 @@ import Data.Traversable (for)
 import GHC.IO.Handle (Handle, hGetChar, hGetContents, hGetLine)
 import qualified Network.AWS.S3 as AWS
 import Servant.Client
+import System.Directory (createDirectoryIfMissing)
 import System.Exit (ExitCode(ExitSuccess))
 import System.Process
 import Text.Regex.Base.RegexLike
@@ -34,26 +35,35 @@ thumbnailUrlDownloadKeyRegex =
 
 downloadVideo ::
      forall m. (MonadBaseControl IO m, MonadError String m, MonadIO m)
-  => AWS.Credentials
-  -> ClientEnv
+  => ClientEnv
   -> Twitch.Video
-  -> m T.Text
-downloadVideo awsCredentials clientEnv video = do
+  -> [(Int, Int)]
+  -> FilePath
+  -> m FilePath
+downloadVideo clientEnv video segments outDir = do
   download_key <- get_video_download_key video
-  let chunk_start = 1000
-  let chunk_end = 1010
+  let chunks =
+        [ chunk
+        | (chunk_start, chunk_end) <- segments
+        , chunk <-
+            [floor (fromIntegral chunk_start / 10) .. floor
+                                                        (fromIntegral chunk_end /
+                                                         10)]
+        ]
+  -- Every chunk represents a 10-second portion of the video.
   mpeg_file_paths <-
-    forConcurrently [chunk_start .. chunk_end] $ \chunk -> do
+    forConcurrently chunks $ \chunk -> do
       liftIO $ putStrLn $ "downloading chunk " <> show chunk
       mpeg_file_path <- download_mpeg_file download_key chunk
       liftIO $ putStrLn $ "finished downloading chunk " <> show chunk
       pure mpeg_file_path
   liftIO $ putStrLn $ "merging mpeg chunks..."
-  out_mp4_file_path <- merge_mpeg_files chunk_start chunk_end
+  out_mp4_file_path <- merge_mpeg_files chunks outDir
   liftIO $ putStrLn $ "deleting mpeg files..."
   delete_mpeg_files mpeg_file_paths
-  liftIO $ putStrLn $ "uploading mp4 file to s3..."
-  upload_mp4_file_to_s3 download_key "output.mp4"
+  pure out_mp4_file_path
+  -- liftIO $ putStrLn $ "uploading mp4 file to s3..."
+  -- upload_mp4_file_to_s3 download_key "output.mp4"
   where
     get_video_download_key :: Twitch.Video -> m String
     get_video_download_key Twitch.Video {Twitch._vThumbnailUrl} = do
@@ -74,13 +84,13 @@ downloadVideo awsCredentials clientEnv video = do
       pure out_mpeg_file_path
     mpeg_chunk_file_name :: Int -> String
     mpeg_chunk_file_name chunk = "chunk" <> show chunk <> ".mpeg"
-    merge_mpeg_files :: Int -> Int -> m FilePath
-    merge_mpeg_files chunk_start chunk_end = do
-      let mpeg_file_paths =
-            [mpeg_chunk_file_name chunk | chunk <- [chunk_start .. chunk_end]]
+    merge_mpeg_files :: [Int] -> FilePath -> m FilePath
+    merge_mpeg_files chunks outDir = do
+      liftIO $ createDirectoryIfMissing True outDir
+      let mpeg_file_paths = [mpeg_chunk_file_name chunk | chunk <- chunks]
       let ffmpeg_input =
             "concat:" <> (T.intercalate "|" (map T.pack mpeg_file_paths))
-      let out_mp4_file_path = "output.mp4"
+      let out_mp4_file_path = outDir <> "output.mp4"
       readProcessM
         "ffmpeg"
         ["-i", T.unpack ffmpeg_input, "-codec", "copy", out_mp4_file_path]
