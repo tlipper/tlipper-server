@@ -65,3 +65,4 @@ executables:
     - transformers
     - wai-logger
     - directory
+    - filepath

@@ -45,6 +45,7 @@ import Servant.Server
 import qualified Twitch.API as Twitch
 import qualified Twitch.Analytics as Twitch
 import qualified Twitch.Vod as Twitch
+import System.FilePath ((</>))
 
 data ExportSegment =
   ExportSegment
@@ -122,8 +123,8 @@ serveFromDatabase state_ref (DB.SqlCtrl runSql) = do
 sqlFindOr404 ::
      DB.SqlCtrl
   -> String
-  -> ReaderT ESQ.SqlBackend (NoLoggingT (ResourceT IO)) (Maybe (DB.Entity record))
-  -> Handler (DB.Entity record)
+  -> ReaderT ESQ.SqlBackend (NoLoggingT (ResourceT IO)) (Maybe a)
+  -> Handler a
 sqlFindOr404 (DB.SqlCtrl runSql) resourceName uniqueRecord =
   liftIO (runSql uniqueRecord) >>= \case
     Just record -> pure record
@@ -177,7 +178,7 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
     -- downloadVideo video_id = do
     --   state <- liftIO $ readIORef state_ref
     --   video <-
-    --     sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId video_id))
+    --     sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
     --   liftIO
     --     (runSql (ESQ.getBy (DB.UniqueVideoUrlVideoId (DB.entityKey video)))) >>= \case
     --     Just (DB.entityVal -> video_url) -> pure $ DB.vuUrl video_url
@@ -222,7 +223,7 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
       state <- liftIO $ readIORef state_ref
       let clientEnv = _ssTwitchClientEnv state
       (fromDatabase . DB.entityVal -> video) <-
-        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId video_id))
+        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
       flip runLiftedClientM clientEnv $
         Twitch.paginate (Just (T.unpack (Twitch._vUserName video))) 1000 $ \_ (Set.toList -> clips) -> do
           let filtered_clips =
@@ -231,42 +232,47 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
     getVideoAnalysis :: VideoId -> Handler Twitch.VideoAnalytics
     getVideoAnalysis video_id = do
       (fromDatabase . DB.entityVal -> video) <-
-        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId video_id))
+        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
       clips <- listClips video_id
       runExceptT (Twitch.analyse video clips) >>= \case
         Left err -> throwError err500 {errBody = LBS8.pack err}
         Right v -> pure v
     takeExportRequest :: TakeExportRequest -> Handler TakeExportResponse
-    takeExportRequest (TakeExportRequest videoId segments) = do
+    takeExportRequest (TakeExportRequest twitchVideoId segments) = do
+      video <-
+        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueTwitchVideoId twitchVideoId))
       state <- liftIO $ readIORef state_ref
       let clientEnv = _ssTwitchClientEnv state
       exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing
-      async $ takeExport clientEnv sqlCtrl videoId exportId segments
+      async $ takeExport clientEnv sqlCtrl video exportId segments
       pure $ TakeExportResponse exportId
 
 takeExport ::
      ClientEnv
   -> DB.SqlCtrl
-  -> VideoId
+  -> DB.Entity DB.Video
   -> DB.Key DB.Export
   -> [ExportSegment]
   -> Handler ()
 takeExport _ _ _ _ [] = do
   liftIO $ putStrLn "Not taking export"
   pure ()
-takeExport clientEnv sqlCtrl videoId exportId exportSegments = do
+takeExport clientEnv sqlCtrl@(DB.SqlCtrl runSql) video exportId exportSegments = do
   let serializedSegments =
         map (_esStartTimestamp &&& _esEndTimestamp) exportSegments
   liftIO $ putStrLn "Taking export..."
-  video <- sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueVideoId videoId))
   runExceptT
     (Twitch.downloadVideo
        clientEnv
        (fromDatabase (DB.entityVal video))
        serializedSegments
-       ("exports/" <> show (ESQ.fromSqlKey exportId) <> "/")) >>= \case
+       ("export" <> show (ESQ.fromSqlKey exportId))
+       ("exports" </> show (ESQ.fromSqlKey exportId))) >>= \case
     Left downloadError -> liftIO $ print downloadError
-    Right mp4_filepath -> liftIO $ putStrLn mp4_filepath
+    Right mp4_url ->
+      liftIO $ runSql $ ESQ.update $ \e -> do
+        ESQ.set e [ DB.EUrl ESQ.=. ESQ.just (ESQ.val (T.pack mp4_url)) ]
+        ESQ.where_ $ e ESQ.^. DB.ExportId ESQ.==. (ESQ.val exportId)
 
 myApi :: Proxy API
 myApi = Proxy

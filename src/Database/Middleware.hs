@@ -44,7 +44,7 @@ instance ToDatabase Twitch.Channel DB.Channel where
 instance FromDatabase DB.Video Twitch.Video where
   fromDatabase (DB.Video {..}) =
     Twitch.Video
-      { _vId = vVid
+      { _vId = vTwitchVideoId
       , _vUserId = vUserId
       , _vUserName = vUserName
       , _vTitle = vTitle
@@ -63,7 +63,7 @@ instance FromDatabase DB.Video Twitch.Video where
 instance ToDatabase Twitch.Video DB.Video where
   toDatabase (Twitch.Video {..}) =
     DB.Video
-      { vVid = _vId
+      { vTwitchVideoId = _vId
       , vUserId = _vUserId
       , vUserName = _vUserName
       , vTitle = _vTitle

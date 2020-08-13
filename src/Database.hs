@@ -39,7 +39,7 @@ Channel
     UniqueChannelId chChId
 
 Video
-    vVid T.Text
+    vTwitchVideoId T.Text
     vUserId T.Text
     vUserName T.Text
     vTitle T.Text
@@ -53,7 +53,7 @@ Video
     vLanguage T.Text
     vType T.Text
     vDuration T.Text
-    UniqueVideoId vVid
+    UniqueTwitchVideoId vTwitchVideoId
     deriving Show
 
 Clip
