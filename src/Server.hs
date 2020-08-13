@@ -46,6 +46,7 @@ import qualified Twitch.API as Twitch
 import qualified Twitch.Analytics as Twitch
 import qualified Twitch.Vod as Twitch
 import System.FilePath ((</>))
+import Data.Int
 
 data ExportSegment =
   ExportSegment
@@ -93,11 +94,14 @@ type GetVideoAnalysis
 type SyncVideo
    = "videos" :> "sync" :> QueryParam' '[ Required] "channel_id" T.Text :> Post '[ JSON] ()
 
+type GetExport
+   = "exports" :> Capture' '[Required] "export_id" Int64 :> Get '[ JSON] DB.Export
+
 type TakeExport
    = "exports" :> ReqBody '[ JSON] TakeExportRequest :> Post '[ JSON] TakeExportResponse
 
 type API
-   = ListChannels :<|> AddChannel :<|> ListVideos :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis :<|> TakeExport
+   = ListChannels :<|> AddChannel :<|> ListVideos :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis :<|> GetExport :<|> TakeExport
 
 data ServerState =
   ServerState
@@ -145,8 +149,7 @@ server :: IORef ServerState -> DB.SqlCtrl -> Server API
 server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
   listChannels :<|> addChannel :<|> listVideos :<|> syncVideos :<|> listClips :<|>
   syncClips :<|>
-  getVideoAnalysis :<|>
-  takeExportRequest
+  getVideoAnalysis :<|> getExport :<|> takeExportRequest
   where
     listChannels :: Handler [Twitch.Channel]
     listChannels = do
@@ -246,6 +249,9 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
       exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing
       async $ takeExport clientEnv sqlCtrl video exportId segments
       pure $ TakeExportResponse exportId
+    getExport :: Int64 -> Handler DB.Export
+    getExport exportId =
+      sqlFindOr404 sqlCtrl "Export" (ESQ.get (ESQ.toSqlKey exportId))
 
 takeExport ::
      ClientEnv

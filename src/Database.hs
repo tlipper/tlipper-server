@@ -11,6 +11,7 @@
 
 module Database where
 
+import Aeson.Extra (jsonPrefix)
 import Conduit
 import Control.Monad.IO.Class
 import Control.Monad.Logger
@@ -23,6 +24,8 @@ import Database.Extra
 import Database.Persist
 import Database.Persist.Postgresql
 import Database.Persist.TH
+import qualified Data.Aeson as JSON
+import qualified Data.Aeson.TH as JSON
 
 share
   [mkPersist appSqlSettings, mkMigrate "migrateAll"]
@@ -108,3 +111,5 @@ withDBMigration postgresqlParams action = do
     withPostgresqlPool (BS8.pack (mkPostgresqlConnUrl postgresqlParams)) 10 $ \pool -> do
       liftIO $ flip runSqlPersistMPool pool $ do runMigration migrateAll
       liftIO $ action (SqlCtrl (flip runSqlPersistMPool pool))
+
+$(JSON.deriveJSON jsonPrefix ''Export)
