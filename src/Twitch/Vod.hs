@@ -79,11 +79,6 @@ downloadVideo clientEnv video segments uniqueVideoKey outDir = do
         Nothing
       tell $ Set.singleton input_fp
       pure out_mp4_file_path
-    delete_mpeg_files :: (MonadCleanup m, MonadError String m, MonadIO m) => Set.Set FilePath -> m ()
-    delete_mpeg_files mpeg_file_paths = do
-      -- Segments can intersect, so it's possible that other segment's cleanup has
-      -- run before this one. Hence we ignore the errors.
-      readProcessM "rm" (Set.toList mpeg_file_paths) Nothing
     upload_mp4_file_to_s3 :: (MonadIO m, MonadError String m) => String -> FilePath -> m T.Text
     upload_mp4_file_to_s3 download_key file_path = do
       cmd_chan <- liftIO newChan
@@ -148,8 +143,8 @@ downloadVideoSegment clientEnv video outDir segmentId (chunk_start, chunk_end) =
   let out_mp4_file_path = outDir </> out_file_name
   liftIO $ putStrLn $ "trimming mp4 file..."
   trim_mp4_video in_mp4_file_path out_mp4_file_path (chunk_start `mod` 10) (chunk_end - chunk_start)
+  tell $ Set.singleton in_mp4_file_path
   liftIO $ putStrLn $ "trimming done..."
-  readProcessM "rm" [in_mp4_file_path] Nothing
   tell $ Set.fromList mpeg_file_paths
   pure out_file_name
   where
@@ -207,7 +202,7 @@ downloadVideoSegment clientEnv video outDir segmentId (chunk_start, chunk_end) =
               pure ()
       readProcessM
         "ffmpeg"
-        ["-i", in_file_path, "-ss", format start_seconds, "-t", show duration, "-c:v", "copy", "-c:a", "copy", out_file_path]
+        ["-ss", format start_seconds, "-t", show duration, "-i", in_file_path, "-async", "1", "-vcodec", "copy", "-acodec", "copy", out_file_path]
         (Just cmd_chan)
 
 
