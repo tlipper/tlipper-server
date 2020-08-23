@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 11726d922153c4a234b6406cc5738459876686eb9554af03b3ec4e0ad99887d7
+-- hash: af64d2e4e3e55cb7c94f04e5a7cdc7c8e5ab45e73bbbfe4e81906475c0b5d76d
 
 name:           tlipper-server
 version:        0.1.0.0
@@ -71,6 +71,7 @@ executable tlipper-server-exe
     , persistent
     , persistent-postgresql
     , persistent-template
+    , privileged-concurrency
     , process
     , regex-base
     , regex-posix
@@ -80,6 +81,7 @@ executable tlipper-server-exe
     , text
     , time
     , transformers
+    , typed-duration
     , unix
     , wai
     , wai-cors

@@ -16,7 +16,9 @@ import Conduit
 import Control.Monad.IO.Class
 import Control.Monad.Logger
 import Control.Monad.Reader
+import qualified Data.Aeson as JSON
 import Data.Aeson.Casing
+import qualified Data.Aeson.TH as JSON
 import qualified Data.Aeson.TH as JSON
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
@@ -24,8 +26,6 @@ import Database.Extra
 import Database.Persist
 import Database.Persist.Postgresql
 import Database.Persist.TH
-import qualified Data.Aeson as JSON
-import qualified Data.Aeson.TH as JSON
 
 share
   [mkPersist appSqlSettings, mkMigrate "migrateAll"]
@@ -82,6 +82,7 @@ VideoUrl
 
 Export
     eUrl T.Text Maybe
+    eCompletion Int default=0
 |]
 
 data PostgresqlParams =

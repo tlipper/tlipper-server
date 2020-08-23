@@ -11,10 +11,13 @@
 
 module Server where
 
+import qualified AWS.API as AWS
 import Aeson.Extra (jsonPrefix)
 import Conduit
 import Control.Arrow ((&&&))
 import Control.Concurrent.Async.Lifted (async)
+import Control.Concurrent.Chan.Class
+import Control.Concurrent.Timeout
 import Control.Monad.Except
 import Control.Monad.IO.Class
 import Control.Monad.Logger
@@ -259,7 +262,7 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
           "Video"
           (ESQ.getBy (DB.UniqueTwitchVideoId twitchVideoId))
       state <- liftIO $ readIORef state_ref
-      exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing
+      exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing 0
       async $
         takeExport clientEnv awsCredentials sqlCtrl video exportId segments
       pure $ TakeExportResponse exportId
@@ -291,7 +294,24 @@ takeExport clientEnv awsCredentials sqlCtrl@(DB.SqlCtrl runSql) video exportId e
        ("export" <> show (ESQ.fromSqlKey exportId))
        ("exports" </> show (ESQ.fromSqlKey exportId))) >>= \case
     Left downloadError -> liftIO $ print downloadError
-    Right mp4_url ->
+    Right upload_progress_chan -> do
+      liftIO $
+        async $ updateUploadProgress exportId sqlCtrl upload_progress_chan
+      pure ()
+
+updateUploadProgress exportId sqlCtrl@(DB.SqlCtrl runSql) upload_progress_chan = do
+  timeout (1 # Minute) (readChan upload_progress_chan) >>= \case
+    Nothing -> do
+      error "Timed out while waiting for export updates."
+      pure () -- TODO(yigitozkavci): Figure out what to do if export cannot be completed.
+    Just (AWS.UploadInProgress percentage) -> do
+      liftIO $
+        runSql $
+        ESQ.update $ \e -> do
+          ESQ.set e [DB.ECompletion ESQ.=. ESQ.val percentage]
+          ESQ.where_ $ e ESQ.^. DB.ExportId ESQ.==. (ESQ.val exportId)
+      updateUploadProgress exportId sqlCtrl upload_progress_chan
+    Just (AWS.UploadFinished mp4_url) ->
       liftIO $
       runSql $
       ESQ.update $ \e -> do

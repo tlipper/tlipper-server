@@ -8,6 +8,9 @@ module AWS.API where
 
 import AWS.Signing (presign)
 import qualified Conduit
+import Control.Concurrent.Async.Lifted (async)
+import Control.Concurrent.Chan.Class
+import Control.Concurrent.Chan.WriteOnly
 import Control.Lens
 import Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.Trans.AWS as AWS
@@ -37,14 +40,22 @@ pr = do
       Conduit.yield v
     Nothing -> pure ()
 
+data UploadProgress
+  = UploadFinished T.Text
+  -- ^ Text represents the download url.
+  | UploadInProgress Int
+  -- ^ Int represents the completion percentage.
+  deriving (Eq, Show)
+
 putChunkedFile ::
      AWS.Credentials
   -> AWS.BucketName
   -> AWS.ObjectKey
   -> Maybe AWS.ChunkSize
   -> FilePath
+  -> WriteOnlyChan UploadProgress
   -> IO ()
-putChunkedFile credentials b k mbChunkSize f = do
+putChunkedFile credentials b@(AWS.BucketName bucket_name) k@(AWS.ObjectKey object_key) mbChunkSize f updateChan = do
   lgr <- AWS.newLogger AWS.Debug stdout
   size <- fileSize <$> getFileStatus f
   putStrLn "SIZE:"
@@ -53,10 +64,14 @@ putChunkedFile credentials b k mbChunkSize f = do
   env <-
     AWS.newEnv credentials <&> set AWS.envRegion AWS.Ireland .
     set AWS.envLogger lgr
-  AWS.runResourceT . AWS.runAWST env $ do
+  void $ async $ AWS.runResourceT . AWS.runAWST env $ do
     let got_update partnum bufsize = do
-          let completion :: Double = fromIntegral partnum * fromIntegral chunk_size / fromIntegral size
-          liftIO $ putStrLn $ T.printf "Completed %d" ((floor (100 * completion)) :: Int)
+          let completion :: Double =
+                fromIntegral partnum * fromIntegral chunk_size /
+                fromIntegral size
+          let percentage :: Int = (floor (100 * completion)) :: Int
+          liftIO $ writeChan updateChan $ UploadInProgress percentage
+          liftIO $ putStrLn $ T.printf "Completed %d" percentage
           pure ()
     resp <-
       Conduit.runConduit $ Conduit.sourceFile f Conduit..|
@@ -64,4 +79,8 @@ putChunkedFile credentials b k mbChunkSize f = do
         (Just chunk_size)
         got_update
         (AWS.createMultipartUpload b k)
+    let url =
+          "https://" <> bucket_name <> ".s3-eu-west-1.amazonaws.com/" <>
+          object_key
+    liftIO $ writeChan updateChan $ UploadFinished url
     pure ()

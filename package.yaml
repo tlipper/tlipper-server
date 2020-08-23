@@ -31,42 +31,44 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - servant
-    - servant-client
-    - http-client
-    - http-client-tls
     - aeson
     - aeson-casing
+    - amazonka >= 1.6.1
+    - amazonka-core
+    - amazonka-s3 >= 1.6.1
+    - amazonka-s3-streaming
+    - attoparsec
     - bytestring
-    - text
-    - regex-posix
-    - regex-base
-    - process
-    - mtl
+    - conduit
+    - containers
+    - directory
+    - dotenv
+    - esqueleto
+    - filepath
+    - http-client
+    - http-client-tls
+    - http-types
+    - lens
     - lifted-async
-    - servant-server
-    - warp
     - monad-control
+    - monad-logger
+    - mtl
     - persistent
     - persistent-postgresql
     - persistent-template
-    - monad-logger
-    - conduit
-    - esqueleto
-    - dotenv
-    - amazonka >= 1.6.1
-    - amazonka-s3 >= 1.6.1
-    - lens
-    - wai-cors
-    - wai
+    - privileged-concurrency
+    - process
+    - regex-base
+    - regex-posix
+    - servant
+    - servant-client
+    - servant-server
+    - text
     - time
-    - attoparsec
-    - containers
     - transformers
-    - wai-logger
-    - directory
-    - filepath
-    - http-types
-    - amazonka-core
+    - typed-duration
     - unix
-    - amazonka-s3-streaming
+    - wai
+    - wai-cors
+    - wai-logger
+    - warp

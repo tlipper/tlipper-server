@@ -13,6 +13,8 @@ import AWS.API as AWS
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Chan
+import Control.Concurrent.Chan.ReadOnly
+import Control.Concurrent.Chan.WriteOnly
 import Control.Concurrent.MVar
 import Control.Exception (catch)
 import Control.Lens.Combinators (TraversableWithIndex, ifor)
@@ -59,7 +61,7 @@ downloadVideo ::
   -> [(Int, Int)]
   -> FilePath
   -> FilePath
-  -> m T.Text
+  -> m (ReadOnlyChan AWS.UploadProgress)
 downloadVideo clientEnv awsCredentials video segments uniqueVideoKey outDir = do
   (out_mp4_file_path, files_to_clean) <-
     runWriterT $ do
@@ -72,9 +74,13 @@ downloadVideo clientEnv awsCredentials video segments uniqueVideoKey outDir = do
   liftIO $ putStrLn $ "cleaning up..."
   liftIO $ print uniqueVideoKey
   readProcessM "rm" (Set.toList files_to_clean) Nothing
-  url <- upload_mp4_file_to_s3 "twitch-vodder-mp4" uniqueVideoKey out_mp4_file_path
-  liftIO $ putStrLn "done!"
-  pure url
+  update_chan <- liftIO newChan
+  upload_mp4_file_to_s3
+    "twitch-vodder-mp4"
+    uniqueVideoKey
+    out_mp4_file_path
+    (toWriteOnlyChan update_chan)
+  pure $ toReadOnlyChan update_chan
   where
     concat_mp4_files ::
          (MonadIO m, MonadCleanup m, MonadError String m)
@@ -96,8 +102,13 @@ downloadVideo clientEnv awsCredentials video segments uniqueVideoKey outDir = do
       tell $ Set.singleton input_fp
       pure out_mp4_file_path
     upload_mp4_file_to_s3 ::
-         (MonadIO m, MonadError String m) => T.Text -> String -> FilePath -> m T.Text
-    upload_mp4_file_to_s3 bucket_name download_key file_path = do
+         (MonadIO m, MonadError String m)
+      => T.Text
+      -> String
+      -> FilePath
+      -> (WriteOnlyChan AWS.UploadProgress)
+      -> m ()
+    upload_mp4_file_to_s3 bucket_name download_key file_path update_chan = do
       liftIO $
         AWS.putChunkedFile
           awsCredentials
@@ -105,7 +116,12 @@ downloadVideo clientEnv awsCredentials video segments uniqueVideoKey outDir = do
           (AWS.ObjectKey ((T.pack uniqueVideoKey) <> ".mp4"))
           Nothing
           file_path
-      pure $ "https://" <> bucket_name <> ".s3-eu-west-1.amazonaws.com/" <> T.pack download_key <> ".mp4"
+          update_chan
+      pure ()
+      -- pure $
+      --   "https://" <>
+      --   bucket_name <>
+      --   ".s3-eu-west-1.amazonaws.com/" <> T.pack download_key <> ".mp4"
 
 downloadVideoSegment ::
      forall m.
