@@ -83,6 +83,7 @@ VideoUrl
 Export
     eUrl T.Text Maybe
     eCompletion Int default=0
+    eError T.Text Maybe
 |]
 
 data PostgresqlParams =

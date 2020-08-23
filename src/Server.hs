@@ -262,7 +262,7 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
           "Video"
           (ESQ.getBy (DB.UniqueTwitchVideoId twitchVideoId))
       state <- liftIO $ readIORef state_ref
-      exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing 0
+      exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing 0 Nothing
       async $
         takeExport clientEnv awsCredentials sqlCtrl video exportId segments
       pure $ TakeExportResponse exportId
@@ -302,8 +302,15 @@ takeExport clientEnv awsCredentials sqlCtrl@(DB.SqlCtrl runSql) video exportId e
 updateUploadProgress exportId sqlCtrl@(DB.SqlCtrl runSql) upload_progress_chan = do
   timeout (1 # Minute) (readChan upload_progress_chan) >>= \case
     Nothing -> do
-      error "Timed out while waiting for export updates."
-      pure () -- TODO(yigitozkavci): Figure out what to do if export cannot be completed.
+      liftIO $
+        runSql $
+        ESQ.update $ \e -> do
+          ESQ.set
+            e
+            [ DB.EUrl ESQ.=.
+              ESQ.just (ESQ.val "Timed out while waiting for export updates.")
+            ]
+          ESQ.where_ $ e ESQ.^. DB.ExportId ESQ.==. (ESQ.val exportId)
     Just (AWS.UploadInProgress percentage) -> do
       liftIO $
         runSql $

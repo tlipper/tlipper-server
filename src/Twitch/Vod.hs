@@ -117,11 +117,6 @@ downloadVideo clientEnv awsCredentials video segments uniqueVideoKey outDir = do
           Nothing
           file_path
           update_chan
-      pure ()
-      -- pure $
-      --   "https://" <>
-      --   bucket_name <>
-      --   ".s3-eu-west-1.amazonaws.com/" <> T.pack download_key <> ".mp4"
 
 downloadVideoSegment ::
      forall m.

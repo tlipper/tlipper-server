@@ -30,16 +30,6 @@ import System.IO
 import System.Posix.Files (fileSize, getFileStatus)
 import qualified Text.Printf as T
 
-chunkSize = 20 * 10 ^ 6 -- Minimum chunk size in S3 multipart uploads is 5MB.
-
-pr :: Conduit.MonadIO m => Conduit.ConduitT i i m ()
-pr = do
-  Conduit.await >>= \case
-    Just v -> do
-      liftIO $ putStrLn "CHUNK!"
-      Conduit.yield v
-    Nothing -> pure ()
-
 data UploadProgress
   = UploadFinished T.Text
   -- ^ Text represents the download url.
@@ -58,8 +48,6 @@ putChunkedFile ::
 putChunkedFile credentials b@(AWS.BucketName bucket_name) k@(AWS.ObjectKey object_key) mbChunkSize f updateChan = do
   lgr <- AWS.newLogger AWS.Debug stdout
   size <- fileSize <$> getFileStatus f
-  putStrLn "SIZE:"
-  print size
   let chunk_size = AWSSU.minimumChunkSize
   env <-
     AWS.newEnv credentials <&> set AWS.envRegion AWS.Ireland .
@@ -71,8 +59,6 @@ putChunkedFile credentials b@(AWS.BucketName bucket_name) k@(AWS.ObjectKey objec
                 fromIntegral size
           let percentage :: Int = (floor (100 * completion)) :: Int
           liftIO $ writeChan updateChan $ UploadInProgress percentage
-          liftIO $ putStrLn $ T.printf "Completed %d" percentage
-          pure ()
     resp <-
       Conduit.runConduit $ Conduit.sourceFile f Conduit..|
       AWSSU.streamUpload
