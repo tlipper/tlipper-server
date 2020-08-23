@@ -15,6 +15,7 @@ import Control.Lens
 import Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.Trans.AWS as AWS
 import Data.Functor (void)
+import Data.IORef (atomicModifyIORef, newIORef)
 import Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
@@ -53,10 +54,12 @@ putChunkedFile credentials b@(AWS.BucketName bucket_name) k@(AWS.ObjectKey objec
     AWS.newEnv credentials <&> set AWS.envRegion AWS.Ireland .
     set AWS.envLogger lgr
   void $ async $ AWS.runResourceT . AWS.runAWST env $ do
+    completion_ref <- liftIO $ newIORef 0
     let got_update partnum bufsize = do
-          let completion :: Double =
-                fromIntegral partnum * fromIntegral chunk_size /
-                fromIntegral size
+          total <-
+            liftIO $ atomicModifyIORef completion_ref $ \uploaded ->
+              (uploaded + bufsize, uploaded + bufsize)
+          let completion :: Double = fromIntegral total / fromIntegral size
           let percentage :: Int = (floor (100 * completion)) :: Int
           liftIO $ writeChan updateChan $ UploadInProgress percentage
     resp <-

@@ -97,6 +97,8 @@ type GetVideoAnalysis
 type SyncVideo
    = "videos" :> "sync" :> QueryParam' '[ Required] "channel_id" T.Text :> Post '[ JSON] ()
 
+type ListExports = "exports" :> Get '[ JSON] [DB.Export]
+
 type GetExport
    = "exports" :> Capture' '[ Required] "export_id" Int64 :> Get '[ JSON] DB.Export
 
@@ -104,7 +106,7 @@ type TakeExport
    = "exports" :> ReqBody '[ JSON] TakeExportRequest :> Post '[ JSON] TakeExportResponse
 
 type API
-   = ListChannels :<|> AddChannel :<|> ListVideos :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis :<|> GetExport :<|> TakeExport
+   = ListChannels :<|> AddChannel :<|> ListVideos :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis :<|> ListExports :<|> GetExport :<|> TakeExport
 
 data ServerState =
   ServerState
@@ -153,6 +155,7 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
   listChannels :<|> addChannel :<|> listVideos :<|> syncVideos :<|> listClips :<|>
   syncClips :<|>
   getVideoAnalysis :<|>
+  listExports :<|>
   getExport :<|>
   takeExportRequest
   where
@@ -262,42 +265,45 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
           "Video"
           (ESQ.getBy (DB.UniqueTwitchVideoId twitchVideoId))
       state <- liftIO $ readIORef state_ref
-      exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing 0 Nothing
-      async $
-        takeExport clientEnv awsCredentials sqlCtrl video exportId segments
-      pure $ TakeExportResponse exportId
+      takeExportAsync clientEnv awsCredentials sqlCtrl video segments >>= \case
+        Left err -> throwError err400 {errBody = "\"" <> LBS8.pack err <> "\""}
+        Right exportId -> pure $ TakeExportResponse exportId
+    listExports :: Handler [DB.Export]
+    listExports = do
+      liftIO $ fmap (map DB.entityVal) $ runSql (ESQ.select $ ESQ.from pure)
     getExport :: Int64 -> Handler DB.Export
     getExport exportId =
       sqlFindOr404 sqlCtrl "Export" (ESQ.get (ESQ.toSqlKey exportId))
 
-takeExport ::
+takeExportAsync ::
      ClientEnv
   -> AWS.Credentials
   -> DB.SqlCtrl
   -> DB.Entity DB.Video
-  -> DB.Key DB.Export
   -> [ExportSegment]
-  -> Handler ()
-takeExport _ _ _ _ _ [] = do
-  liftIO $ putStrLn "Not taking export"
-  pure ()
-takeExport clientEnv awsCredentials sqlCtrl@(DB.SqlCtrl runSql) video exportId exportSegments = do
+  -> Handler (Either String (DB.Key DB.Export))
+takeExportAsync _ _ _ _ [] = do
+  pure $ Left "Video segment list is empty, not taking export."
+takeExportAsync clientEnv awsCredentials sqlCtrl@(DB.SqlCtrl runSql) video exportSegments = do
   let serializedSegments =
         map (_esStartTimestamp &&& _esEndTimestamp) exportSegments
   liftIO $ putStrLn "Taking export..."
-  runExceptT
-    (Twitch.downloadVideo
-       clientEnv
-       awsCredentials
-       (fromDatabase (DB.entityVal video))
-       serializedSegments
-       ("export" <> show (ESQ.fromSqlKey exportId))
-       ("exports" </> show (ESQ.fromSqlKey exportId))) >>= \case
-    Left downloadError -> liftIO $ print downloadError
-    Right upload_progress_chan -> do
-      liftIO $
-        async $ updateUploadProgress exportId sqlCtrl upload_progress_chan
-      pure ()
+  exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing 0 Nothing
+  async $
+    runExceptT
+      (Twitch.downloadVideo
+         clientEnv
+         awsCredentials
+         (fromDatabase (DB.entityVal video))
+         serializedSegments
+         ("export" <> show (ESQ.fromSqlKey exportId))
+         ("exports" </> show (ESQ.fromSqlKey exportId))) >>= \case
+      Left downloadError -> liftIO $ print downloadError
+      Right upload_progress_chan -> do
+        liftIO $
+          async $ updateUploadProgress exportId sqlCtrl upload_progress_chan
+        pure ()
+  pure $ Right exportId
 
 updateUploadProgress exportId sqlCtrl@(DB.SqlCtrl runSql) upload_progress_chan = do
   timeout (1 # Minute) (readChan upload_progress_chan) >>= \case
@@ -323,6 +329,7 @@ updateUploadProgress exportId sqlCtrl@(DB.SqlCtrl runSql) upload_progress_chan =
       runSql $
       ESQ.update $ \e -> do
         ESQ.set e [DB.EUrl ESQ.=. ESQ.just (ESQ.val mp4_url)]
+        ESQ.set e [DB.ECompletion ESQ.=. ESQ.val 100]
         ESQ.where_ $ e ESQ.^. DB.ExportId ESQ.==. (ESQ.val exportId)
 
 myApi :: Proxy API

@@ -244,11 +244,7 @@ readProcessM ::
   -> [String]
   -> Maybe (Chan Char)
   -> m ()
-readProcessM cmd args mb_out_chan
-  -- liftIO $ do
-  --   putStrLn "Running:"
-  --   putStrLn $ "$ " <> cmd <> " " <> intercalate (" ") args
- = do
+readProcessM cmd args mb_out_chan = do
   (code, err) <-
     case mb_out_chan of
       Nothing ->
