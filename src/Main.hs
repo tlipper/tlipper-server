@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main where
@@ -15,12 +16,9 @@ import qualified Twitch.API as Twitch
 main :: IO ()
 main = do
   void $ loadFile defaultConfig
-  let awsCredentials =
-        AWS.FromEnv
-          "AWS_ACCESS_KEY"
-          "AWS_SECRET_KEY"
-          Nothing
-          (Just "AWS_REGION")
+  awsCredentials <-
+    AWS.FromKeys <$> (AWS.AccessKey . BS8.pack <$> getEnv "AWS_ACCESS_KEY") <*>
+    (AWS.SecretKey . BS8.pack <$> getEnv "AWS_SECRET_KEY")
   twitchAppAccessToken <- getEnv "TWITCH_APP_ACCESS_TOKEN"
   twitchClientId <- getEnv "TWITCH_CLIENT_ID"
   serverPort <- read <$> getEnv "SERVER_PORT"

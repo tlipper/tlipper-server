@@ -54,8 +54,8 @@ executables:
     - conduit
     - esqueleto
     - dotenv
-    - amazonka
-    - amazonka-s3
+    - amazonka >= 1.6.1
+    - amazonka-s3 >= 1.6.1
     - lens
     - wai-cors
     - wai
@@ -66,3 +66,7 @@ executables:
     - wai-logger
     - directory
     - filepath
+    - http-types
+    - amazonka-core
+    - unix
+    - amazonka-s3-streaming

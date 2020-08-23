@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 34a99c3ca1afe2cda220eb0470e443836d869c5d93fadea09795081e762efeb5
+-- hash: 11726d922153c4a234b6406cc5738459876686eb9554af03b3ec4e0ad99887d7
 
 name:           tlipper-server
 version:        0.1.0.0
@@ -30,6 +30,7 @@ executable tlipper-server-exe
   other-modules:
       Aeson.Extra
       AWS.API
+      AWS.Signing
       Database
       Database.Extra
       Database.Middleware
@@ -46,8 +47,10 @@ executable tlipper-server-exe
   build-depends:
       aeson
     , aeson-casing
-    , amazonka
-    , amazonka-s3
+    , amazonka >=1.6.1
+    , amazonka-core
+    , amazonka-s3 >=1.6.1
+    , amazonka-s3-streaming
     , attoparsec
     , base >=4.7 && <5
     , bytestring
@@ -59,6 +62,7 @@ executable tlipper-server-exe
     , filepath
     , http-client
     , http-client-tls
+    , http-types
     , lens
     , lifted-async
     , monad-control
@@ -76,6 +80,7 @@ executable tlipper-server-exe
     , text
     , time
     , transformers
+    , unix
     , wai
     , wai-cors
     , wai-logger

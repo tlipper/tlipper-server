@@ -26,6 +26,7 @@ import qualified Data.ByteString.Lazy.Char8 as LBS8
 import Data.Foldable (find)
 import Data.Foldable (for_)
 import Data.IORef
+import Data.Int
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Database as DB
@@ -42,11 +43,10 @@ import Network.Wai.Middleware.Cors
 import Servant
 import Servant.Client (ClientEnv, ClientM, runClientM)
 import Servant.Server
+import System.FilePath ((</>))
 import qualified Twitch.API as Twitch
 import qualified Twitch.Analytics as Twitch
 import qualified Twitch.Vod as Twitch
-import System.FilePath ((</>))
-import Data.Int
 
 data ExportSegment =
   ExportSegment
@@ -95,7 +95,7 @@ type SyncVideo
    = "videos" :> "sync" :> QueryParam' '[ Required] "channel_id" T.Text :> Post '[ JSON] ()
 
 type GetExport
-   = "exports" :> Capture' '[Required] "export_id" Int64 :> Get '[ JSON] DB.Export
+   = "exports" :> Capture' '[ Required] "export_id" Int64 :> Get '[ JSON] DB.Export
 
 type TakeExport
    = "exports" :> ReqBody '[ JSON] TakeExportRequest :> Post '[ JSON] TakeExportResponse
@@ -149,7 +149,9 @@ server :: IORef ServerState -> DB.SqlCtrl -> Server API
 server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
   listChannels :<|> addChannel :<|> listVideos :<|> syncVideos :<|> listClips :<|>
   syncClips :<|>
-  getVideoAnalysis :<|> getExport :<|> takeExportRequest
+  getVideoAnalysis :<|>
+  getExport :<|>
+  takeExportRequest
   where
     listChannels :: Handler [Twitch.Channel]
     listChannels = do
@@ -226,7 +228,10 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
       state <- liftIO $ readIORef state_ref
       let clientEnv = _ssTwitchClientEnv state
       (fromDatabase . DB.entityVal -> video) <-
-        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
+        sqlFindOr404
+          sqlCtrl
+          "Video"
+          (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
       flip runLiftedClientM clientEnv $
         Twitch.paginate (Just (T.unpack (Twitch._vUserName video))) 1000 $ \_ (Set.toList -> clips) -> do
           let filtered_clips =
@@ -235,19 +240,28 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
     getVideoAnalysis :: VideoId -> Handler Twitch.VideoAnalytics
     getVideoAnalysis video_id = do
       (fromDatabase . DB.entityVal -> video) <-
-        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
+        sqlFindOr404
+          sqlCtrl
+          "Video"
+          (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
       clips <- listClips video_id
       runExceptT (Twitch.analyse video clips) >>= \case
         Left err -> throwError err500 {errBody = LBS8.pack err}
         Right v -> pure v
     takeExportRequest :: TakeExportRequest -> Handler TakeExportResponse
     takeExportRequest (TakeExportRequest twitchVideoId segments) = do
-      video <-
-        sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueTwitchVideoId twitchVideoId))
       state <- liftIO $ readIORef state_ref
+      let awsCredentials = _ssAwsCredentials state
       let clientEnv = _ssTwitchClientEnv state
+      video <-
+        sqlFindOr404
+          sqlCtrl
+          "Video"
+          (ESQ.getBy (DB.UniqueTwitchVideoId twitchVideoId))
+      state <- liftIO $ readIORef state_ref
       exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing
-      async $ takeExport clientEnv sqlCtrl video exportId segments
+      async $
+        takeExport clientEnv awsCredentials sqlCtrl video exportId segments
       pure $ TakeExportResponse exportId
     getExport :: Int64 -> Handler DB.Export
     getExport exportId =
@@ -255,29 +269,33 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
 
 takeExport ::
      ClientEnv
+  -> AWS.Credentials
   -> DB.SqlCtrl
   -> DB.Entity DB.Video
   -> DB.Key DB.Export
   -> [ExportSegment]
   -> Handler ()
-takeExport _ _ _ _ [] = do
+takeExport _ _ _ _ _ [] = do
   liftIO $ putStrLn "Not taking export"
   pure ()
-takeExport clientEnv sqlCtrl@(DB.SqlCtrl runSql) video exportId exportSegments = do
+takeExport clientEnv awsCredentials sqlCtrl@(DB.SqlCtrl runSql) video exportId exportSegments = do
   let serializedSegments =
         map (_esStartTimestamp &&& _esEndTimestamp) exportSegments
   liftIO $ putStrLn "Taking export..."
   runExceptT
     (Twitch.downloadVideo
        clientEnv
+       awsCredentials
        (fromDatabase (DB.entityVal video))
        serializedSegments
        ("export" <> show (ESQ.fromSqlKey exportId))
        ("exports" </> show (ESQ.fromSqlKey exportId))) >>= \case
     Left downloadError -> liftIO $ print downloadError
     Right mp4_url ->
-      liftIO $ runSql $ ESQ.update $ \e -> do
-        ESQ.set e [ DB.EUrl ESQ.=. ESQ.just (ESQ.val (T.pack mp4_url)) ]
+      liftIO $
+      runSql $
+      ESQ.update $ \e -> do
+        ESQ.set e [DB.EUrl ESQ.=. ESQ.just (ESQ.val mp4_url)]
         ESQ.where_ $ e ESQ.^. DB.ExportId ESQ.==. (ESQ.val exportId)
 
 myApi :: Proxy API

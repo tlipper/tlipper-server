@@ -15,10 +15,15 @@ import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Chan
 import Control.Concurrent.MVar
 import Control.Exception (catch)
+import Control.Lens.Combinators (TraversableWithIndex, ifor)
 import Control.Monad.Except
 import Control.Monad.IO.Class
 import qualified Control.Monad.Trans.AWS as AWS
 import Control.Monad.Trans.Control
+import Control.Monad.Writer
+import Data.Functor (($>))
+import Data.List (intercalate)
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.Traversable (for)
 import GHC.IO.Handle (Handle, hGetChar, hGetContents, hGetLine)
@@ -26,23 +31,22 @@ import qualified Network.AWS.S3 as AWS
 import Servant.Client
 import System.Directory (createDirectoryIfMissing)
 import System.Exit (ExitCode(ExitSuccess))
+import System.FilePath ((</>))
 import System.Process
+import Text.Printf
 import Text.Regex.Base.RegexLike
 import Text.Regex.Posix
 import qualified Twitch.API as Twitch
-import Control.Lens.Combinators (ifor, TraversableWithIndex)
-import Text.Printf
-import Data.Functor (($>))
-import Data.List (intercalate)
-import qualified Data.Set as Set
-import Control.Monad.Writer
-import System.FilePath ((</>))
 
 thumbnailUrlDownloadKeyRegex :: Regex
 thumbnailUrlDownloadKeyRegex =
   makeRegex ("https://.+/cf_vods/.+/(.+)//thumb/.+" :: String)
 
-concurrentIFor :: (MonadBaseControl IO m, TraversableWithIndex i t, Applicative m) => t a -> (i -> a -> m b) -> m (t b)
+concurrentIFor ::
+     (MonadBaseControl IO m, TraversableWithIndex i t, Applicative m)
+  => t a
+  -> (i -> a -> m b)
+  -> m (t b)
 concurrentIFor l f = runConcurrently $ ifor l $ \i a -> Concurrently (f i a)
 
 type MonadCleanup = MonadWriter (Set.Set FilePath)
@@ -50,26 +54,38 @@ type MonadCleanup = MonadWriter (Set.Set FilePath)
 downloadVideo ::
      (MonadBaseControl IO m, MonadError String m, MonadIO m)
   => ClientEnv
+  -> AWS.Credentials
   -> Twitch.Video
   -> [(Int, Int)]
   -> FilePath
   -> FilePath
-  -> m FilePath
-downloadVideo clientEnv video segments uniqueVideoKey outDir = do
-  (out_mp4_file_path, files_to_clean) <- runWriterT $ do
-    mp4_segments <- concurrentIFor segments $ downloadVideoSegment clientEnv video outDir
-    liftIO $ putStrLn $ "concatting mp4 files..."
-    out_mp4_file_path <- concat_mp4_files mp4_segments outDir "final.mp4"
-    tell $ Set.fromList $ map (outDir </>) mp4_segments
-    pure out_mp4_file_path
+  -> m T.Text
+downloadVideo clientEnv awsCredentials video segments uniqueVideoKey outDir = do
+  (out_mp4_file_path, files_to_clean) <-
+    runWriterT $ do
+      mp4_segments <-
+        concurrentIFor segments $ downloadVideoSegment clientEnv video outDir
+      liftIO $ putStrLn $ "concatting mp4 files..."
+      out_mp4_file_path <- concat_mp4_files mp4_segments outDir "final.mp4"
+      tell $ Set.fromList $ map (outDir </>) mp4_segments
+      pure out_mp4_file_path
   liftIO $ putStrLn $ "cleaning up..."
+  liftIO $ print uniqueVideoKey
   readProcessM "rm" (Set.toList files_to_clean) Nothing
-  url <- upload_mp4_file_to_s3 uniqueVideoKey out_mp4_file_path
-  pure $ T.unpack url
+  url <- upload_mp4_file_to_s3 "twitch-vodder-mp4" uniqueVideoKey out_mp4_file_path
+  liftIO $ putStrLn "done!"
+  pure url
   where
-    concat_mp4_files :: (MonadIO m, MonadCleanup m, MonadError String m) => [FilePath] -> FilePath -> FilePath -> m FilePath
+    concat_mp4_files ::
+         (MonadIO m, MonadCleanup m, MonadError String m)
+      => [FilePath]
+      -> FilePath
+      -> FilePath
+      -> m FilePath
     concat_mp4_files input_paths out_dir out_name = do
-      let input_file_content = T.unpack $ T.intercalate "\n" $ map (("file " <>) . T.pack) input_paths
+      let input_file_content =
+            T.unpack $
+            T.intercalate "\n" $ map (("file " <>) . T.pack) input_paths
       let input_fp = out_dir </> "input.txt"
       liftIO $ writeFile input_fp input_file_content
       let out_mp4_file_path = out_dir </> out_name
@@ -79,47 +95,21 @@ downloadVideo clientEnv video segments uniqueVideoKey outDir = do
         Nothing
       tell $ Set.singleton input_fp
       pure out_mp4_file_path
-    upload_mp4_file_to_s3 :: (MonadIO m, MonadError String m) => String -> FilePath -> m T.Text
-    upload_mp4_file_to_s3 download_key file_path = do
-      cmd_chan <- liftIO newChan
-      stop_reading_out_chan <- liftIO newEmptyMVar
-      void $
-        liftIO $
-        forkIO $
-        fix $ \rec -> do
-          tryReadMVar stop_reading_out_chan >>= \case
-            Nothing -> do
-              putChar =<< readChan cmd_chan
-              rec
-            Just _ -> do
-              pure ()
-      readProcessM
-        "aws"
-        [ "s3"
-        , "mv"
-        , file_path
-        , "s3://twitch-vodder-mp4/" <> download_key <> ".mp4"
-        ]
-        (Just cmd_chan)
-      readProcessM
-        "aws"
-        [ "s3api"
-        , "put-object-acl"
-        , "--bucket"
-        , "twitch-vodder-mp4"
-        , "--key"
-        , download_key <> ".mp4"
-        , "--acl"
-        , "public-read"
-        ]
-        Nothing
-      liftIO $ putMVar stop_reading_out_chan ()
-      pure $
-        "https://twitch-vodder-mp4.s3.eu-west-1.amazonaws.com/" <>
-        T.pack download_key <> ".mp4"
+    upload_mp4_file_to_s3 ::
+         (MonadIO m, MonadError String m) => T.Text -> String -> FilePath -> m T.Text
+    upload_mp4_file_to_s3 bucket_name download_key file_path = do
+      liftIO $
+        AWS.putChunkedFile
+          awsCredentials
+          (AWS.BucketName bucket_name)
+          (AWS.ObjectKey ((T.pack uniqueVideoKey) <> ".mp4"))
+          Nothing
+          file_path
+      pure $ "https://" <> bucket_name <> ".s3-eu-west-1.amazonaws.com/" <> T.pack download_key <> ".mp4"
 
-downloadVideoSegment :: 
-     forall m. (MonadCleanup m, MonadBaseControl IO m, MonadError String m, MonadIO m)
+downloadVideoSegment ::
+     forall m.
+     (MonadCleanup m, MonadBaseControl IO m, MonadError String m, MonadIO m)
   => ClientEnv
   -> Twitch.Video
   -> FilePath
@@ -129,7 +119,9 @@ downloadVideoSegment ::
   -> m FilePath
 downloadVideoSegment clientEnv video outDir segmentId (chunk_start, chunk_end) = do
   download_key <- get_video_download_key video
-  let chunks = [floor (fromIntegral chunk_start / 10) .. floor (fromIntegral chunk_end / 10)]
+  let chunks =
+        [floor (fromIntegral chunk_start / 10) .. floor
+                                                    (fromIntegral chunk_end / 10)]
   -- Every chunk represents a 10-second portion of the video.
   mpeg_file_paths <-
     forConcurrently chunks $ \chunk -> do
@@ -138,11 +130,16 @@ downloadVideoSegment clientEnv video outDir segmentId (chunk_start, chunk_end) =
       liftIO $ putStrLn $ "finished downloading chunk " <> show chunk
       pure mpeg_file_path
   liftIO $ putStrLn $ "merging mpeg chunks..."
-  in_mp4_file_path <- merge_mpeg_files chunks outDir ("segment" <> show segmentId <> ".mp4")
+  in_mp4_file_path <-
+    merge_mpeg_files chunks outDir ("segment" <> show segmentId <> ".mp4")
   let out_file_name = "segment" <> show segmentId <> "_trimmed.mp4"
   let out_mp4_file_path = outDir </> out_file_name
   liftIO $ putStrLn $ "trimming mp4 file..."
-  trim_mp4_video in_mp4_file_path out_mp4_file_path (chunk_start `mod` 10) (chunk_end - chunk_start)
+  trim_mp4_video
+    in_mp4_file_path
+    out_mp4_file_path
+    (chunk_start `mod` 10)
+    (chunk_end - chunk_start)
   tell $ Set.singleton in_mp4_file_path
   liftIO $ putStrLn $ "trimming done..."
   tell $ Set.fromList mpeg_file_paths
@@ -170,7 +167,8 @@ downloadVideoSegment clientEnv video outDir segmentId (chunk_start, chunk_end) =
     mpeg_chunk_file_name chunk = "chunk" <> show chunk <> ".mpeg"
     merge_mpeg_files :: [Int] -> FilePath -> String -> m FilePath
     merge_mpeg_files chunks outDir outFileName = do
-      let mpeg_file_paths = [outDir </> mpeg_chunk_file_name chunk | chunk <- chunks]
+      let mpeg_file_paths =
+            [outDir </> mpeg_chunk_file_name chunk | chunk <- chunks]
       let ffmpeg_input =
             "concat:" <> (T.intercalate "|" (map T.pack mpeg_file_paths))
       let out_mp4_file_path = outDir </> outFileName
@@ -184,10 +182,21 @@ downloadVideoSegment clientEnv video outDir segmentId (chunk_start, chunk_end) =
       let out_mp4_file_path = "chunk" <> show chunk <> ".mp4"
       readProcessM "ffmpeg" ["-i", mts_file_path, out_mp4_file_path] Nothing
       pure out_mp4_file_path
-    trim_mp4_video :: (MonadError String m, MonadIO m) => FilePath -> FilePath -> Int -> Int -> m ()
+    trim_mp4_video ::
+         (MonadError String m, MonadIO m)
+      => FilePath
+      -> FilePath
+      -> Int
+      -> Int
+      -> m ()
     trim_mp4_video in_file_path out_file_path start_seconds duration = do
       let format :: (Integral s, PrintfArg s) => s -> String
-          format s = printf "%02d:%02d:%02d.000" (s `div` 3600) (s `mod` 3600 `div` 60) (s `div` 60)
+          format s =
+            printf
+              "%02d:%02d:%02d.000"
+              (s `div` 3600)
+              (s `mod` 3600 `div` 60)
+              (s `div` 60)
       cmd_chan <- liftIO newChan
       stop_reading_out_chan <- liftIO newEmptyMVar
       void $
@@ -202,9 +211,21 @@ downloadVideoSegment clientEnv video outDir segmentId (chunk_start, chunk_end) =
               pure ()
       readProcessM
         "ffmpeg"
-        ["-ss", format start_seconds, "-t", show duration, "-i", in_file_path, "-async", "1", "-vcodec", "copy", "-acodec", "copy", out_file_path]
+        [ "-ss"
+        , format start_seconds
+        , "-t"
+        , show duration
+        , "-i"
+        , in_file_path
+        , "-async"
+        , "1"
+        , "-vcodec"
+        , "copy"
+        , "-acodec"
+        , "copy"
+        , out_file_path
+        ]
         (Just cmd_chan)
-
 
 readProcessM ::
      (MonadError String m, MonadIO m)
@@ -212,10 +233,11 @@ readProcessM ::
   -> [String]
   -> Maybe (Chan Char)
   -> m ()
-readProcessM cmd args mb_out_chan = do
+readProcessM cmd args mb_out_chan
   -- liftIO $ do
   --   putStrLn "Running:"
   --   putStrLn $ "$ " <> cmd <> " " <> intercalate (" ") args
+ = do
   (code, err) <-
     case mb_out_chan of
       Nothing ->
