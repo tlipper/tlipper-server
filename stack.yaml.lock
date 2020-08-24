@@ -68,6 +68,20 @@ packages:
       sha256: 59f5c6098045c16481f52f5860cc08193d5c42cdf7c7ce6b4dd37fd53d71beee
   original:
     hackage: typed-duration-0.1.1.0@sha256:432c971e471e819d8c2663487ce0e95f848e668fd9720e56f966bb56edbfe0a6,949
+- completed:
+    hackage: prometheus-2.2.2@sha256:d794f5fe975be2f3ca7d7af71a7aeeb006615ad7d98835fa42caba9457a51936,4288
+    pantry-tree:
+      size: 1559
+      sha256: 3b1cb27cf8cb0a8da83b5730e85132e058e808f8dd1be349ea3dbb162c7f14c3
+  original:
+    hackage: prometheus-2.2.2
+- completed:
+    hackage: prometheus-wai-middleware-1.0.1.0@sha256:a65a8c02e47e5bd6eccfd9ea9cbefcbc01f109be080a3832d759e1b3f33a673a,1537
+    pantry-tree:
+      size: 355
+      sha256: efe1ec58759b8926555dca41bbafed69da0b3008d0508312445ec969c0bc107e
+  original:
+    hackage: prometheus-wai-middleware-1.0.1.0
 snapshots:
 - completed:
     size: 524154

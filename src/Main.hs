@@ -9,6 +9,7 @@ import qualified Control.Monad.Trans.AWS as AWS
 import qualified Data.ByteString.Char8 as BS8
 import Data.Functor (void)
 import Database (PostgresqlParams(..), withDBMigration)
+import Monitoring (HttpMetrics(..), withPrometheus)
 import Server (runServer)
 import System.Environment (getEnv)
 import qualified Twitch.API as Twitch
@@ -30,5 +31,12 @@ main = do
   let postgresqlParams = PostgresqlParams dbHost dbPort dbUser dbName dbPass
   twitchClientEnv <-
     Twitch.mkTwitchClientEnv twitchAppAccessToken twitchClientId
-  withDBMigration postgresqlParams $ \sqlCtrl -> do
-    runServer twitchClientEnv awsCredentials serverPort sqlCtrl
+  withPrometheus $ \servantMetrics counters ->
+    withDBMigration postgresqlParams $ \sqlCtrl -> do
+      runServer
+        servantMetrics
+        counters
+        twitchClientEnv
+        awsCredentials
+        serverPort
+        sqlCtrl

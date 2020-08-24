@@ -72,4 +72,3 @@ putChunkedFile credentials b@(AWS.BucketName bucket_name) k@(AWS.ObjectKey objec
           "https://" <> bucket_name <> ".s3-eu-west-1.amazonaws.com/" <>
           object_key
     liftIO $ writeChan updateChan $ UploadFinished url
-    pure ()

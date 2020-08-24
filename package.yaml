@@ -72,3 +72,6 @@ executables:
     - wai-cors
     - wai-logger
     - warp
+    - prometheus
+    - prometheus-wai-middleware
+    - unordered-containers

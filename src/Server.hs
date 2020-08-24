@@ -33,80 +33,27 @@ import Data.Int
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Database as DB
-import qualified Database as DB
 import qualified Database.Esqueleto as ESQ
 import Database.Middleware
 import qualified Database.Persist as DB
 import Database.Persist
 import GHC.Generics
+import Monitoring (AppMetrics(..), ServantMetrics)
 import Network.Wai (Middleware)
 import qualified Network.Wai.Handler.Warp as Warp
 import Network.Wai.Logger (withStdoutLogger)
 import Network.Wai.Middleware.Cors
+import Network.Wai.Middleware.Prometheus (instrumentApplication)
+import qualified Network.Wai.Middleware.Prometheus as P
 import Servant
 import Servant.Client (ClientEnv, ClientM, runClientM)
 import Servant.Server
+import Server.API
+import Server.API.Monitoring (monitorServant)
 import System.FilePath ((</>))
 import qualified Twitch.API as Twitch
 import qualified Twitch.Analytics as Twitch
 import qualified Twitch.Vod as Twitch
-
-data ExportSegment =
-  ExportSegment
-    { _esStartTimestamp :: Int
-    , _esEndTimestamp :: Int
-    }
-  deriving (Show)
-
-data TakeExportRequest =
-  TakeExportRequest
-    { _terVideoId :: VideoId
-    , _terExportSegments :: [ExportSegment]
-    }
-  deriving (Show)
-
-data TakeExportResponse =
-  TakeExportResponse
-    { _terExportId :: Key DB.Export -- It's a very bad idea to couple DB type in response type. Refactor this.
-    }
-  deriving (Show)
-
-type VideoId = T.Text
-
-type UserId = Int
-
-type ListChannels = "channels" :> Get '[ JSON] [Twitch.Channel]
-
-type AddChannel
-   = "channels" :> QueryParam' '[ Required] "name" T.Text :> Post '[ JSON] Twitch.Channel
-
-type ListVideos
-   = "videos" :> QueryParam' '[ Required] "channel_id" T.Text :> Get '[ JSON] [Twitch.Video]
-
-type ListClips
-   = "videos" :> Capture' '[ Required] "video_id" VideoId :> "clips" :> Get '[ JSON] [Twitch.Clip]
-
-type SyncClips
-   = "videos" :> Capture' '[ Required] "video_id" VideoId :> "clips" :> "sync" :> Post '[ JSON] ()
-
-type GetVideoAnalysis
-   = "videos" :> Capture' '[ Required] "video_id" VideoId :> "analysis" :> Get '[ JSON] Twitch.VideoAnalytics
-
--- type DownloadVideo
---    = "download" :> ReqBody '[ JSON] VideoId :> Post '[ JSON] T.Text
-type SyncVideo
-   = "videos" :> "sync" :> QueryParam' '[ Required] "channel_id" T.Text :> Post '[ JSON] ()
-
-type ListExports = "exports" :> Get '[ JSON] [DB.Export]
-
-type GetExport
-   = "exports" :> Capture' '[ Required] "export_id" Int64 :> Get '[ JSON] DB.Export
-
-type TakeExport
-   = "exports" :> ReqBody '[ JSON] TakeExportRequest :> Post '[ JSON] TakeExportResponse
-
-type API
-   = ListChannels :<|> AddChannel :<|> ListVideos :<|> SyncVideo :<|> ListClips :<|> SyncClips :<|> GetVideoAnalysis :<|> ListExports :<|> GetExport :<|> TakeExport
 
 data ServerState =
   ServerState
@@ -335,20 +282,36 @@ updateUploadProgress exportId sqlCtrl@(DB.SqlCtrl runSql) upload_progress_chan =
 myApi :: Proxy API
 myApi = Proxy
 
-app :: IORef ServerState -> DB.SqlCtrl -> Application
-app state sqlCtrl = allowCors $ serve myApi (server state sqlCtrl)
+app ::
+     ServantMetrics
+  -> AppMetrics
+  -> IORef ServerState
+  -> DB.SqlCtrl
+  -> Application
+app servantMetrics appMetrics state sqlCtrl =
+  allowCorsMiddleware $
+  monitorServant (Proxy @API) servantMetrics $
+  -- P.instrumentApplication applicationMetrics $
+  serve myApi (server state sqlCtrl)
 
-runServer :: ClientEnv -> AWS.Credentials -> Int -> DB.SqlCtrl -> IO ()
-runServer twitchClientEnv awsCredentials port sqlCtrl = do
+runServer ::
+     ServantMetrics
+  -> AppMetrics
+  -> ClientEnv
+  -> AWS.Credentials
+  -> Int
+  -> DB.SqlCtrl
+  -> IO ()
+runServer servantMetrics appMetrics twitchClientEnv awsCredentials port sqlCtrl = do
   state <- newIORef (ServerState twitchClientEnv awsCredentials)
   putStrLn $ "Server is running on port " <> show port <> "..."
   withStdoutLogger $ \logger ->
     let settings =
           Warp.setPort port $ Warp.setLogger logger Warp.defaultSettings
-     in Warp.runSettings settings (app state sqlCtrl)
+     in Warp.runSettings settings (app servantMetrics appMetrics state sqlCtrl)
 
-allowCors :: Middleware
-allowCors = cors (const $ Just appCorsResourcePolicy)
+allowCorsMiddleware :: Middleware
+allowCorsMiddleware = cors (const $ Just appCorsResourcePolicy)
 
 appCorsResourcePolicy :: CorsResourcePolicy
 appCorsResourcePolicy =

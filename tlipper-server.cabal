@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: af64d2e4e3e55cb7c94f04e5a7cdc7c8e5ab45e73bbbfe4e81906475c0b5d76d
+-- hash: 56e6635f535950eb26625a4f6b96480fa2e3876025f3e24d636b6da1e0ea3dac
 
 name:           tlipper-server
 version:        0.1.0.0
@@ -34,7 +34,11 @@ executable tlipper-server-exe
       Database
       Database.Extra
       Database.Middleware
+      Monitoring
       Server
+      Server.API
+      Server.API.Endpoints
+      Server.API.Monitoring
       Twitch.Analytics
       Twitch.API
       Twitch.Utils
@@ -73,6 +77,8 @@ executable tlipper-server-exe
     , persistent-template
     , privileged-concurrency
     , process
+    , prometheus
+    , prometheus-wai-middleware
     , regex-base
     , regex-posix
     , servant
@@ -83,6 +89,7 @@ executable tlipper-server-exe
     , transformers
     , typed-duration
     , unix
+    , unordered-containers
     , wai
     , wai-cors
     , wai-logger

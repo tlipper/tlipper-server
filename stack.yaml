@@ -50,6 +50,8 @@ extra-deps:
     commit: 0e6602d4c9854854f5e266a26b71e1ce5d02c777
   - privileged-concurrency-0.7.0@sha256:c73bb0000b5e1b7335cb1ca5065054173b0e911701345715eb6112b118b6919e,1749
   - typed-duration-0.1.1.0@sha256:432c971e471e819d8c2663487ce0e95f848e668fd9720e56f966bb56edbfe0a6,949
+  - prometheus-2.2.2
+  - prometheus-wai-middleware-1.0.1.0
 # Override default flag values for local packages and extra-deps
 # flags: {}
 
