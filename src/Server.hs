@@ -49,6 +49,7 @@ import Servant.Server
 import Server.API
 import Server.API.Monitoring (monitorServant)
 import System.FilePath ((</>))
+import System.Log.FastLogger
 import qualified Twitch.API as Twitch
 import qualified Twitch.Analytics as Twitch
 import qualified Twitch.Vod as Twitch
@@ -58,6 +59,11 @@ data ServerState =
     { _ssTwitchClientEnv :: ClientEnv
     , _ssAwsCredentials :: AWS.Credentials
     }
+
+logM :: ToLogStr msg => msg -> AppM ()
+logM msg = do
+  loggerSet <- asks _acLoggerSet
+  liftIO $ pushLogStrLn loggerSet $ toLogStr msg
 
 runSqlM ::
      forall a. ReaderT ESQ.SqlBackend (NoLoggingT (ResourceT IO)) a -> AppM a
@@ -95,6 +101,7 @@ data AppCtx =
     { _acTwitchClientEnv :: ClientEnv
     , _acAwsCredentials :: AWS.Credentials
     , _acSqlCtrl :: DB.SqlCtrl
+    , _acLoggerSet :: LoggerSet
     }
 
 type AppM = ReaderT AppCtx Handler
@@ -207,7 +214,7 @@ takeExportAsync _ _ _ [] = do
 takeExportAsync clientEnv awsCredentials video exportSegments = do
   let serializedSegments =
         map (_esStartTimestamp &&& _esEndTimestamp) exportSegments
-  liftIO $ putStrLn "Taking export..."
+  logM ("Taking export..." :: String)
   exportId <- runSqlM $ ESQ.insert $ DB.Export Nothing 0 Nothing
   async $
     runExceptT
@@ -269,10 +276,12 @@ runServer ::
   -> AWS.Credentials
   -> Int
   -> DB.SqlCtrl
+  -> LoggerSet
   -> IO ()
-runServer servantMetrics appMetrics twitchClientEnv awsCredentials port sqlCtrl = do
-  let appCtx = AppCtx twitchClientEnv awsCredentials sqlCtrl
-  putStrLn $ "Server is running on port " <> show port <> "..."
+runServer servantMetrics appMetrics twitchClientEnv awsCredentials port sqlCtrl loggerSet = do
+  let appCtx = AppCtx twitchClientEnv awsCredentials sqlCtrl loggerSet
+  pushLogStrLn loggerSet $
+    toLogStr $ "Server is running on port " <> show port <> "..."
   withStdoutLogger $ \logger ->
     let settings =
           Warp.setPort port $ Warp.setLogger logger Warp.defaultSettings

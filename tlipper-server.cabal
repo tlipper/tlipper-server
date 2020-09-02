@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: db34c2b10896e501eebc66f056b485603271f6d9528e010b3df33498cae5dcfb
+-- hash: a0b1ed31e54137cdd354ae4586cef0cdeda53df767d22df14957c153bef69447
 
 name:           tlipper-server
 version:        0.1.0.0
@@ -64,6 +64,7 @@ executable tlipper-server-exe
     , dotenv
     , esqueleto
     , exceptions
+    , fast-logger
     , filepath
     , http-client
     , http-client-tls

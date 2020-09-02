@@ -241,11 +241,7 @@ listPaginatedVideos mbChannelId consumeResults =
     (fmap (_pCursor . _lvrPagination &&& _lvrData) <$>
      listVideos (Just 100) mbChannelId)
     10000
-    (\p r -> do
-       liftIO $
-         putStrLn $
-         "[Videos] Page: " <> show p <> ", Results: " <> show (Set.size r)
-       consumeResults p r)
+    consumeResults
 
 listPaginatedClips ::
      Maybe String
@@ -253,22 +249,13 @@ listPaginatedClips ::
   -> (Int -> Set.Set Clip -> ClientM ())
   -> ClientM ()
 listPaginatedClips mbUserName chunkFilter consumeResults = do
-  liftIO $ putStrLn "paginating..."
   fmap mconcat $
     forConcurrently ["day", "week", "all"] $ \window ->
       paginateRaw
         (fmap (_lcr_Cursor &&& filterOutNonVodClips . _lcrClips) <$>
          listClips mbUserName (Just 100) (Just window))
         1000
-        (\p r -> do
-           liftIO $
-             putStrLn $
-             "[" <>
-             window <>
-             " Clips of " <>
-             fromMaybe "<unknown>" mbUserName <>
-             "] Page: " <> show p <> ", Results: " <> show r
-           consumeResults p r)
+        consumeResults
 
 type SearchChannels
    = "helix" :> "search" :> "channels" :> QueryParam' '[ Required] "query" T.Text :> QueryParam "after" String :> Get '[ JSON] SearchChannelsResponse

@@ -75,3 +75,4 @@ executables:
     - prometheus >= 2.2.2
     - unordered-containers
     - exceptions
+    - fast-logger

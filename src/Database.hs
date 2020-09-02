@@ -112,7 +112,7 @@ newtype SqlCtrl =
 
 withDBMigration :: PostgresqlParams -> (SqlCtrl -> IO ()) -> IO ()
 withDBMigration postgresqlParams action = do
-  runNoLoggingT $
+  runStdoutLoggingT $
     withPostgresqlPool (BS8.pack (mkPostgresqlConnUrl postgresqlParams)) 10 $ \pool -> do
       liftIO $ flip runSqlPersistMPool pool $ do runMigration migrateAll
       liftIO $ action (SqlCtrl (flip runSqlPersistMPool pool))

@@ -13,6 +13,7 @@ import Database (PostgresqlParams(..), withDBMigration)
 import Monitoring (HttpMetrics(..), withPrometheus)
 import Server (runServer)
 import System.Environment (getEnv)
+import System.Log.FastLogger
 import qualified Twitch.API as Twitch
 
 main :: IO ()
@@ -31,13 +32,11 @@ main
   dbName <- getEnv "DB_NAME"
   dbPass <- getEnv "DB_PASS"
   let postgresqlParams = PostgresqlParams dbHost dbPort dbUser dbName dbPass
+  loggerSet <- newStdoutLoggerSet 100
   twitchClientEnv <-
     Twitch.mkTwitchClientEnv twitchAppAccessToken twitchClientId
-  runStdoutLoggingT $ logInfo "starting..."
   withPrometheus $ \servantMetrics counters -> do
-    putStrLn "wowowowowo 1"
     withDBMigration postgresqlParams $ \sqlCtrl -> do
-      putStrLn "wowowowowo"
       runServer
         servantMetrics
         counters
@@ -45,3 +44,4 @@ main
         awsCredentials
         8080
         sqlCtrl
+        loggerSet

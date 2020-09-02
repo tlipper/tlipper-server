@@ -67,11 +67,9 @@ downloadVideo clientEnv awsCredentials video segments uniqueVideoKey outDir = do
     runWriterT $ do
       mp4_segments <-
         concurrentIFor segments $ downloadVideoSegment clientEnv video outDir
-      liftIO $ putStrLn $ "concatting mp4 files..."
       out_mp4_file_path <- concat_mp4_files mp4_segments outDir "final.mp4"
       tell $ Set.fromList $ map (outDir </>) mp4_segments
       pure out_mp4_file_path
-  liftIO $ putStrLn $ "cleaning up..."
   liftIO $ print uniqueVideoKey
   readProcessM "rm" (Set.toList files_to_clean) Nothing
   update_chan <- liftIO newChan
@@ -136,23 +134,18 @@ downloadVideoSegment clientEnv video outDir segmentId (chunk_start, chunk_end) =
   -- Every chunk represents a 10-second portion of the video.
   mpeg_file_paths <-
     forConcurrently chunks $ \chunk -> do
-      liftIO $ putStrLn $ "downloading chunk " <> show chunk
       mpeg_file_path <- download_mpeg_file outDir download_key chunk
-      liftIO $ putStrLn $ "finished downloading chunk " <> show chunk
       pure mpeg_file_path
-  liftIO $ putStrLn $ "merging mpeg chunks..."
   in_mp4_file_path <-
     merge_mpeg_files chunks outDir ("segment" <> show segmentId <> ".mp4")
   let out_file_name = "segment" <> show segmentId <> "_trimmed.mp4"
   let out_mp4_file_path = outDir </> out_file_name
-  liftIO $ putStrLn $ "trimming mp4 file..."
   trim_mp4_video
     in_mp4_file_path
     out_mp4_file_path
     (chunk_start `mod` 10)
     (chunk_end - chunk_start)
   tell $ Set.singleton in_mp4_file_path
-  liftIO $ putStrLn $ "trimming done..."
   tell $ Set.fromList mpeg_file_paths
   pure out_file_name
   where
@@ -256,17 +249,12 @@ readProcessM cmd args mb_out_chan = do
           pure (code, err)
       Just out_chan ->
         liftIO $ do
-          putStrLn "Creating the process..."
           (_, Just stdout_handle, Just stderr_handle, p_handle) <-
             createProcess
               (proc cmd args) {std_out = CreatePipe, std_err = CreatePipe}
-          putStrLn "Waiting for process..."
           code <- waitForProcess p_handle
-          putStrLn "Attaching stream handle to channel..."
           stream_handle_to_chan stdout_handle out_chan
-          putStrLn "Getting error handle contents..."
           err <- hGetContents stderr_handle
-          putStrLn "Returning..."
           pure (code, err)
   case code of
     ExitSuccess -> pure ()
