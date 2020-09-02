@@ -17,8 +17,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Traversable (for)
 import Network.HTTP.Types
-import Network.Wai.Middleware.Prometheus (applicationMetrics)
-import qualified Network.Wai.Middleware.Prometheus as P
 import Server.API (endpoints)
 import qualified System.Metrics.Prometheus.Concurrent.RegistryT as P
 import qualified System.Metrics.Prometheus.Http.Scrape as P

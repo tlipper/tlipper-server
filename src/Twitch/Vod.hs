@@ -108,15 +108,15 @@ downloadVideo clientEnv awsCredentials video segments uniqueVideoKey outDir = do
       -> FilePath
       -> (WriteOnlyChan AWS.UploadProgress)
       -> m ()
-    upload_mp4_file_to_s3 bucket_name download_key file_path update_chan = do
+    upload_mp4_file_to_s3 bucket_name download_key file_path update_chan =
       liftIO $
-        AWS.putChunkedFile
-          awsCredentials
-          (AWS.BucketName bucket_name)
-          (AWS.ObjectKey ((T.pack uniqueVideoKey) <> ".mp4"))
-          Nothing
-          file_path
-          update_chan
+      AWS.putChunkedFile
+        awsCredentials
+        (AWS.BucketName bucket_name)
+        (AWS.ObjectKey ((T.pack uniqueVideoKey) <> ".mp4"))
+        Nothing
+        file_path
+        update_chan
 
 downloadVideoSegment ::
      forall m.

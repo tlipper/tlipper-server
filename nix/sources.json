@@ -1,0 +1,38 @@
+{
+    "niv": {
+        "branch": "master",
+        "description": "Easy dependency management for Nix projects",
+        "homepage": "https://github.com/nmattia/niv",
+        "owner": "nmattia",
+        "repo": "niv",
+        "rev": "fad2a6cbfb2e7cdebb7cb0ad2f5cc91e2c9bc06b",
+        "sha256": "0mghc1j0rd15spdjx81bayjqr0khc062cs25y5dcfzlxk4ynyc6m",
+        "type": "tarball",
+        "url": "https://github.com/nmattia/niv/archive/fad2a6cbfb2e7cdebb7cb0ad2f5cc91e2c9bc06b.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    },
+    "nixops": {
+        "branch": "release-1.7",
+        "description": "NixOps is a tool for deploying to NixOS machines in a network or cloud.",
+        "homepage": "https://nixos.org/nixops",
+        "owner": "kshaa",
+        "repo": "nixops",
+        "rev": "fb6d4665e8efd858a215bbaaf079ec3f5ebc49b8",
+        "sha256": "1rkk31ka4w5dklcwvy3s73pi6yjymijcnmjq4n3wkc1rjs5ck7y2",
+        "type": "tarball",
+        "url": "https://github.com/kshaa/nixops/archive/fb6d4665e8efd858a215bbaaf079ec3f5ebc49b8.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    },
+    "nixpkgs": {
+        "branch": "release-20.03",
+        "description": "Nix Packages collection",
+        "homepage": null,
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "2847777ec7e8be68ebafb30cd4c3dcd721208f99",
+        "sha256": "14bv9i0swbw04k4fwbb34dzf7yyd6ax79kr3xzrmj475a694fkz4",
+        "type": "tarball",
+        "url": "https://github.com/NixOS/nixpkgs/archive/2847777ec7e8be68ebafb30cd4c3dcd721208f99.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    }
+}

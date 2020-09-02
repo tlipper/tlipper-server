@@ -48,12 +48,12 @@ packages:
     version: 1.1.0.0
     git: https://github.com/yigitozkavci/amazonka-s3-streaming.git
     pantry-tree:
-      size: 663
-      sha256: db33212b6dc2d831026b720066ecc2aa0c13d25ab519f081367918cd76142823
-    commit: 0e6602d4c9854854f5e266a26b71e1ce5d02c777
+      size: 783
+      sha256: 4792fe4b675a0e1367eef39d50a5b8943097260f9df996506092b46bad7acf02
+    commit: a3642b1c964283a6f9eb062511909fce459ce40b
   original:
     git: https://github.com/yigitozkavci/amazonka-s3-streaming.git
-    commit: 0e6602d4c9854854f5e266a26b71e1ce5d02c777
+    commit: a3642b1c964283a6f9eb062511909fce459ce40b
 - completed:
     hackage: privileged-concurrency-0.7.0@sha256:c73bb0000b5e1b7335cb1ca5065054173b0e911701345715eb6112b118b6919e,1749
     pantry-tree:

@@ -34,7 +34,7 @@ executables:
     - aeson
     - aeson-casing
     - amazonka >= 1.6.1
-    - amazonka-core
+    - amazonka-core >= 1.6.1
     - amazonka-s3 >= 1.6.1
     - amazonka-s3-streaming
     - attoparsec
@@ -72,6 +72,6 @@ executables:
     - wai-cors
     - wai-logger
     - warp
-    - prometheus
-    - prometheus-wai-middleware
+    - prometheus >= 2.2.2
     - unordered-containers
+    - exceptions

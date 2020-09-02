@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 56e6635f535950eb26625a4f6b96480fa2e3876025f3e24d636b6da1e0ea3dac
+-- hash: db34c2b10896e501eebc66f056b485603271f6d9528e010b3df33498cae5dcfb
 
 name:           tlipper-server
 version:        0.1.0.0
@@ -52,7 +52,7 @@ executable tlipper-server-exe
       aeson
     , aeson-casing
     , amazonka >=1.6.1
-    , amazonka-core
+    , amazonka-core >=1.6.1
     , amazonka-s3 >=1.6.1
     , amazonka-s3-streaming
     , attoparsec
@@ -63,6 +63,7 @@ executable tlipper-server-exe
     , directory
     , dotenv
     , esqueleto
+    , exceptions
     , filepath
     , http-client
     , http-client-tls
@@ -77,8 +78,7 @@ executable tlipper-server-exe
     , persistent-template
     , privileged-concurrency
     , process
-    , prometheus
-    , prometheus-wai-middleware
+    , prometheus >=2.2.2
     , regex-base
     , regex-posix
     , servant

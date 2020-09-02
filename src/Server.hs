@@ -43,8 +43,6 @@ import Network.Wai (Middleware)
 import qualified Network.Wai.Handler.Warp as Warp
 import Network.Wai.Logger (withStdoutLogger)
 import Network.Wai.Middleware.Cors
-import Network.Wai.Middleware.Prometheus (instrumentApplication)
-import qualified Network.Wai.Middleware.Prometheus as P
 import Servant
 import Servant.Client (ClientEnv, ClientM, runClientM)
 import Servant.Server
@@ -61,28 +59,29 @@ data ServerState =
     , _ssAwsCredentials :: AWS.Credentials
     }
 
+runSqlM ::
+     forall a. ReaderT ESQ.SqlBackend (NoLoggingT (ResourceT IO)) a -> AppM a
+runSqlM q = do
+  DB.SqlCtrl runSql <- asks _acSqlCtrl
+  liftIO $ runSql q
+
 serveFromDatabase ::
      ( DB.BackendCompatible ESQ.SqlBackend (DB.PersistEntityBackend a)
      , DB.PersistEntity a
      , FromDatabase a b
      )
-  => IORef ServerState
-  -> DB.SqlCtrl
-  -> Handler [b]
-serveFromDatabase state_ref (DB.SqlCtrl runSql) = do
-  state <- liftIO $ readIORef state_ref
+  => AppM [b]
+serveFromDatabase = do
   dbChannels <-
-    liftIO $
-    fmap (map DB.entityVal) $ runSql (ESQ.select $ ESQ.from $ \v -> return v)
+    fmap (map DB.entityVal) $ runSqlM (ESQ.select $ ESQ.from $ \v -> return v)
   pure $ map fromDatabase dbChannels
 
 sqlFindOr404 ::
-     DB.SqlCtrl
-  -> String
+     String
   -> ReaderT ESQ.SqlBackend (NoLoggingT (ResourceT IO)) (Maybe a)
-  -> Handler a
-sqlFindOr404 (DB.SqlCtrl runSql) resourceName uniqueRecord =
-  liftIO (runSql uniqueRecord) >>= \case
+  -> AppM a
+sqlFindOr404 resourceName uniqueRecord = do
+  runSqlM uniqueRecord >>= \case
     Just record -> pure record
     Nothing ->
       throwError
@@ -91,14 +90,23 @@ sqlFindOr404 (DB.SqlCtrl runSql) resourceName uniqueRecord =
               "Could not find the " <> LBS8.pack resourceName <> " resource."
           }
 
-runLiftedClientM :: ClientM a -> ClientEnv -> Handler a
+data AppCtx =
+  AppCtx
+    { _acTwitchClientEnv :: ClientEnv
+    , _acAwsCredentials :: AWS.Credentials
+    , _acSqlCtrl :: DB.SqlCtrl
+    }
+
+type AppM = ReaderT AppCtx Handler
+
+runLiftedClientM :: ClientM a -> ClientEnv -> AppM a
 runLiftedClientM act env =
   liftIO (runClientM act env) >>= \case
     Left clientErr -> throwError err500 {errBody = LBS8.pack (show clientErr)}
     Right result -> pure result
 
-server :: IORef ServerState -> DB.SqlCtrl -> Server API
-server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
+server :: ServerT API AppM
+server =
   listChannels :<|> addChannel :<|> listVideos :<|> syncVideos :<|> listClips :<|>
   syncClips :<|>
   getVideoAnalysis :<|>
@@ -106,136 +114,101 @@ server state_ref sqlCtrl@(DB.SqlCtrl runSql) =
   getExport :<|>
   takeExportRequest
   where
-    listChannels :: Handler [Twitch.Channel]
+    listChannels :: AppM [Twitch.Channel]
     listChannels = do
-      serveFromDatabase state_ref sqlCtrl
-    addChannel :: T.Text -> Handler Twitch.Channel
+      serveFromDatabase
+    addChannel :: T.Text -> AppM Twitch.Channel
     addChannel channel_name = do
-      state <- liftIO $ readIORef state_ref
-      let clientEnv = _ssTwitchClientEnv state
+      clientEnv <- asks _acTwitchClientEnv
       channels <-
         runLiftedClientM (Twitch.paginateBlocking channel_name 100) clientEnv
       case find ((== channel_name) . Twitch._chDisplayName) channels of
         Nothing -> throwError err404 {errBody = "Could not find the channel."}
         Just c -> do
-          liftIO $ runSql $ ESQ.insert (toDatabase c)
+          runSqlM $ ESQ.insert (toDatabase c)
           pure c
-    listVideos :: T.Text -> Handler [Twitch.Video]
+    listVideos :: T.Text -> AppM [Twitch.Video]
     listVideos channel_id = do
-      state <- liftIO $ readIORef state_ref
       dbChannels <-
-        liftIO $
         fmap (map DB.entityVal) $
-        runSql
+        runSqlM
           (ESQ.select $
            ESQ.from $ \v -> do
              ESQ.where_ ((v ESQ.^. DB.VUserId) ESQ.==. (ESQ.val channel_id))
              return v)
       pure $ map fromDatabase dbChannels
-    -- downloadVideo :: VideoId -> Handler T.Text
-    -- downloadVideo video_id = do
-    --   state <- liftIO $ readIORef state_ref
-    --   video <-
-    --     sqlFindOr404 sqlCtrl "Video" (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
-    --   liftIO
-    --     (runSql (ESQ.getBy (DB.UniqueVideoUrlVideoId (DB.entityKey video)))) >>= \case
-    --     Just (DB.entityVal -> video_url) -> pure $ DB.vuUrl video_url
-    --     Nothing -> do
-    --       runExceptT
-    --         (Twitch.downloadVideo
-    --            (_ssTwitchClientEnv state)
-    --            (fromDatabase (DB.entityVal video))) >>= \case
-    --         Left err -> throwError err400 {errBody = LBS8.pack err}
-    --         Right url -> do
-    --           liftIO $
-    --             runSql $ ESQ.insert (DB.VideoUrl (DB.entityKey video) url)
-    --           pure url
-    syncVideos :: T.Text -> Handler ()
+    syncVideos :: T.Text -> AppM ()
     syncVideos channel_id = do
-      state <- liftIO $ readIORef state_ref
       (DB.entityVal -> channel) <-
-        sqlFindOr404 sqlCtrl "Channel" $
-        ESQ.getBy (DB.UniqueChannelId channel_id)
-      let clientEnv = _ssTwitchClientEnv state
+        sqlFindOr404 "Channel" $ ESQ.getBy (DB.UniqueChannelId channel_id)
+      clientEnv <- asks _acTwitchClientEnv
       (Set.toList -> videos) <-
         flip runLiftedClientM clientEnv $
         Twitch.paginateBlocking (Just (DB.chChId channel)) 1000
-      liftIO $ runSql $ DB.putMany $ map toDatabase videos
+      runSqlM $ DB.putMany $ map toDatabase videos
       let videoIds = map Twitch._vId videos
+      DB.SqlCtrl runSql <- asks _acSqlCtrl
       flip runLiftedClientM clientEnv $
         Twitch.paginate (Just (T.unpack (DB.chDisplayName channel))) 1000 $ \_ (Set.toList -> clips) -> do
           let filtered_clips =
                 filter ((`elem` videoIds) . Twitch._cvId . Twitch._cVod) clips
           liftIO $ runSql $ DB.putMany $ map toDatabase filtered_clips
-    listClips :: VideoId -> Handler [Twitch.Clip]
-    listClips video_id =
-      liftIO $
+    listClips :: VideoId -> AppM [Twitch.Clip]
+    listClips video_id = do
       fmap (map (fromDatabase . DB.entityVal)) $
-      runSql
-        (ESQ.select $
-         ESQ.from $ \v -> do
-           ESQ.where_ ((v ESQ.^. DB.CVodId) ESQ.==. (ESQ.val video_id))
-           return v)
-    syncClips :: VideoId -> Handler ()
+        runSqlM
+          (ESQ.select $
+           ESQ.from $ \v -> do
+             ESQ.where_ ((v ESQ.^. DB.CVodId) ESQ.==. (ESQ.val video_id))
+             return v)
+    syncClips :: VideoId -> AppM ()
     syncClips video_id = do
-      state <- liftIO $ readIORef state_ref
-      let clientEnv = _ssTwitchClientEnv state
+      clientEnv <- asks _acTwitchClientEnv
+      DB.SqlCtrl runSql <- asks _acSqlCtrl
       (fromDatabase . DB.entityVal -> video) <-
-        sqlFindOr404
-          sqlCtrl
-          "Video"
-          (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
+        sqlFindOr404 "Video" (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
       flip runLiftedClientM clientEnv $
         Twitch.paginate (Just (T.unpack (Twitch._vUserName video))) 1000 $ \_ (Set.toList -> clips) -> do
           let filtered_clips =
                 filter ((== video_id) . Twitch._cvId . Twitch._cVod) clips
           liftIO $ runSql $ DB.putMany $ map toDatabase filtered_clips
-    getVideoAnalysis :: VideoId -> Handler Twitch.VideoAnalytics
+    getVideoAnalysis :: VideoId -> AppM Twitch.VideoAnalytics
     getVideoAnalysis video_id = do
       (fromDatabase . DB.entityVal -> video) <-
-        sqlFindOr404
-          sqlCtrl
-          "Video"
-          (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
+        sqlFindOr404 "Video" (ESQ.getBy (DB.UniqueTwitchVideoId video_id))
       clips <- listClips video_id
       runExceptT (Twitch.analyse video clips) >>= \case
         Left err -> throwError err500 {errBody = LBS8.pack err}
         Right v -> pure v
-    takeExportRequest :: TakeExportRequest -> Handler TakeExportResponse
+    takeExportRequest :: TakeExportRequest -> AppM TakeExportResponse
     takeExportRequest (TakeExportRequest twitchVideoId segments) = do
-      state <- liftIO $ readIORef state_ref
-      let awsCredentials = _ssAwsCredentials state
-      let clientEnv = _ssTwitchClientEnv state
+      awsCredentials <- asks _acAwsCredentials
+      clientEnv <- asks _acTwitchClientEnv
       video <-
-        sqlFindOr404
-          sqlCtrl
-          "Video"
-          (ESQ.getBy (DB.UniqueTwitchVideoId twitchVideoId))
-      state <- liftIO $ readIORef state_ref
-      takeExportAsync clientEnv awsCredentials sqlCtrl video segments >>= \case
+        sqlFindOr404 "Video" (ESQ.getBy (DB.UniqueTwitchVideoId twitchVideoId))
+      takeExportAsync clientEnv awsCredentials video segments >>= \case
         Left err -> throwError err400 {errBody = "\"" <> LBS8.pack err <> "\""}
         Right exportId -> pure $ TakeExportResponse exportId
-    listExports :: Handler [DB.Export]
+    listExports :: AppM [DB.Export]
     listExports = do
-      liftIO $ fmap (map DB.entityVal) $ runSql (ESQ.select $ ESQ.from pure)
-    getExport :: Int64 -> Handler DB.Export
-    getExport exportId =
-      sqlFindOr404 sqlCtrl "Export" (ESQ.get (ESQ.toSqlKey exportId))
+      fmap (map DB.entityVal) $ runSqlM (ESQ.select $ ESQ.from pure)
+    getExport :: Int64 -> AppM DB.Export
+    getExport exportId = do
+      sqlFindOr404 "Export" (ESQ.get (ESQ.toSqlKey exportId))
 
 takeExportAsync ::
      ClientEnv
   -> AWS.Credentials
-  -> DB.SqlCtrl
   -> DB.Entity DB.Video
   -> [ExportSegment]
-  -> Handler (Either String (DB.Key DB.Export))
-takeExportAsync _ _ _ _ [] = do
+  -> AppM (Either String (DB.Key DB.Export))
+takeExportAsync _ _ _ [] = do
   pure $ Left "Video segment list is empty, not taking export."
-takeExportAsync clientEnv awsCredentials sqlCtrl@(DB.SqlCtrl runSql) video exportSegments = do
+takeExportAsync clientEnv awsCredentials video exportSegments = do
   let serializedSegments =
         map (_esStartTimestamp &&& _esEndTimestamp) exportSegments
   liftIO $ putStrLn "Taking export..."
-  exportId <- liftIO $ runSql $ ESQ.insert $ DB.Export Nothing 0 Nothing
+  exportId <- runSqlM $ ESQ.insert $ DB.Export Nothing 0 Nothing
   async $
     runExceptT
       (Twitch.downloadVideo
@@ -247,33 +220,29 @@ takeExportAsync clientEnv awsCredentials sqlCtrl@(DB.SqlCtrl runSql) video expor
          ("exports" </> show (ESQ.fromSqlKey exportId))) >>= \case
       Left downloadError -> liftIO $ print downloadError
       Right upload_progress_chan -> do
-        liftIO $
-          async $ updateUploadProgress exportId sqlCtrl upload_progress_chan
+        async $ updateUploadProgress exportId upload_progress_chan
         pure ()
   pure $ Right exportId
 
-updateUploadProgress exportId sqlCtrl@(DB.SqlCtrl runSql) upload_progress_chan = do
-  timeout (1 # Minute) (readChan upload_progress_chan) >>= \case
+updateUploadProgress exportId upload_progress_chan = do
+  timeout (5 # Minute) (readChan upload_progress_chan) >>= \case
     Nothing -> do
-      liftIO $
-        runSql $
+      runSqlM $
         ESQ.update $ \e -> do
           ESQ.set
             e
-            [ DB.EUrl ESQ.=.
+            [ DB.EError ESQ.=.
               ESQ.just (ESQ.val "Timed out while waiting for export updates.")
             ]
           ESQ.where_ $ e ESQ.^. DB.ExportId ESQ.==. (ESQ.val exportId)
     Just (AWS.UploadInProgress percentage) -> do
-      liftIO $
-        runSql $
+      runSqlM $
         ESQ.update $ \e -> do
           ESQ.set e [DB.ECompletion ESQ.=. ESQ.val percentage]
           ESQ.where_ $ e ESQ.^. DB.ExportId ESQ.==. (ESQ.val exportId)
-      updateUploadProgress exportId sqlCtrl upload_progress_chan
+      updateUploadProgress exportId upload_progress_chan
     Just (AWS.UploadFinished mp4_url) ->
-      liftIO $
-      runSql $
+      runSqlM $
       ESQ.update $ \e -> do
         ESQ.set e [DB.EUrl ESQ.=. ESQ.just (ESQ.val mp4_url)]
         ESQ.set e [DB.ECompletion ESQ.=. ESQ.val 100]
@@ -282,17 +251,16 @@ updateUploadProgress exportId sqlCtrl@(DB.SqlCtrl runSql) upload_progress_chan =
 myApi :: Proxy API
 myApi = Proxy
 
-app ::
-     ServantMetrics
-  -> AppMetrics
-  -> IORef ServerState
-  -> DB.SqlCtrl
-  -> Application
-app servantMetrics appMetrics state sqlCtrl =
+app :: ServantMetrics -> AppMetrics -> DB.SqlCtrl -> AppCtx -> Application
+app servantMetrics appMetrics sqlCtrl appCtx =
   allowCorsMiddleware $
   monitorServant (Proxy @API) servantMetrics $
-  -- P.instrumentApplication applicationMetrics $
-  serve myApi (server state sqlCtrl)
+  serve myApi $
+  hoistServerWithContext
+    myApi
+    (Proxy :: Proxy '[])
+    (flip runReaderT appCtx)
+    server
 
 runServer ::
      ServantMetrics
@@ -303,12 +271,12 @@ runServer ::
   -> DB.SqlCtrl
   -> IO ()
 runServer servantMetrics appMetrics twitchClientEnv awsCredentials port sqlCtrl = do
-  state <- newIORef (ServerState twitchClientEnv awsCredentials)
+  let appCtx = AppCtx twitchClientEnv awsCredentials sqlCtrl
   putStrLn $ "Server is running on port " <> show port <> "..."
   withStdoutLogger $ \logger ->
     let settings =
           Warp.setPort port $ Warp.setLogger logger Warp.defaultSettings
-     in Warp.runSettings settings (app servantMetrics appMetrics state sqlCtrl)
+     in Warp.runSettings settings (app servantMetrics appMetrics sqlCtrl appCtx)
 
 allowCorsMiddleware :: Middleware
 allowCorsMiddleware = cors (const $ Just appCorsResourcePolicy)

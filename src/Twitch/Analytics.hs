@@ -11,7 +11,9 @@ module Twitch.Analytics where
 import Aeson.Extra (jsonPrefix)
 import Control.Monad.Except
 import qualified Data.Aeson.TH as JSON
+import Data.Coerce
 import Data.List (sortOn)
+import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime)
 import Data.Time.Format
@@ -67,6 +69,8 @@ parseTimeData video clips = do
     for clips $ \c -> do
       clipPosition <- Twitch.parseVodPositionOfClip c
       clipCreatedAt <-
+        fromMaybe (Left "couldn't parse time") $
+        fmap Right $
         parseTimeM
           False
           defaultTimeLocale
