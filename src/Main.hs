@@ -17,9 +17,8 @@ import System.Log.FastLogger
 import qualified Twitch.API as Twitch
 
 main :: IO ()
-main
-  -- void $ loadFile defaultConfig
- = do
+main = do
+  void $ loadFile defaultConfig
   awsCredentials <-
     AWS.FromKeys <$> (AWS.AccessKey . BS8.pack <$> getEnv "AWS_ACCESS_KEY") <*>
     (AWS.SecretKey . BS8.pack <$> getEnv "AWS_SECRET_KEY")

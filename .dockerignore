@@ -1,0 +1,5 @@
+.stack-work
+build
+.dockerignore
+Dockerfile
+Dockerfile.prod

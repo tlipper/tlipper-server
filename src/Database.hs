@@ -17,7 +17,8 @@ module Database where
 import Aeson.Extra (jsonPrefix)
 import Conduit
 import Control.Monad.IO.Class
-import Control.Monad.Logger
+import Control.Monad.Logger hiding (logInfo)
+import Control.Monad.Logger.CallStack (logInfo)
 import Control.Monad.Reader
 import qualified Data.Aeson as JSON
 import Data.Aeson.Casing
@@ -112,7 +113,8 @@ newtype SqlCtrl =
 
 withDBMigration :: PostgresqlParams -> (SqlCtrl -> IO ()) -> IO ()
 withDBMigration postgresqlParams action = do
-  runStdoutLoggingT $
+  runStdoutLoggingT $ do
+    logInfo "Running DB migration..."
     withPostgresqlPool (BS8.pack (mkPostgresqlConnUrl postgresqlParams)) 10 $ \pool -> do
       liftIO $ flip runSqlPersistMPool pool $ do runMigration migrateAll
       liftIO $ action (SqlCtrl (flip runSqlPersistMPool pool))
